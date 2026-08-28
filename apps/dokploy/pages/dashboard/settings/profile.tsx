@@ -3,6 +3,7 @@ import { createServerSideHelpers } from "@trpc/react-query/server";
 import type { GetServerSidePropsContext } from "next";
 import type { ReactElement } from "react";
 import superjson from "superjson";
+import { McpConnection } from "@/components/dashboard/settings/api/mcp-connection";
 import { ShowApiKeys } from "@/components/dashboard/settings/api/show-api-keys";
 import { LinkingAccount } from "@/components/dashboard/settings/linking-account/linking-account";
 import { ProfileForm } from "@/components/dashboard/settings/profile/profile-form";
@@ -20,6 +21,7 @@ const Page = () => {
 				<ProfileForm />
 				{isCloud && <LinkingAccount />}
 				{permissions?.api.read && <ShowApiKeys />}
+				{permissions?.api.read && !isCloud && <McpConnection />}
 			</div>
 		</div>
 	);
