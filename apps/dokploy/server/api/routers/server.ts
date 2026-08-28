@@ -592,6 +592,7 @@ export const serverRouter = createTRPCRouter({
 					serverType: server.serverType,
 					serverStatus: server.serverStatus,
 					metricsConfig: server.metricsConfig,
+					sshKeyId: server.sshKeyId,
 				})
 				.from(server)
 				.where(eq(server.organizationId, ctx.session.activeOrganizationId))
@@ -609,6 +610,7 @@ export const serverRouter = createTRPCRouter({
 					name: s.name,
 					ipAddress: s.ipAddress,
 					monitoringEnabled: Boolean(s.metricsConfig?.server?.token),
+					hasSshKey: Boolean(s.sshKeyId),
 				}));
 		},
 	),

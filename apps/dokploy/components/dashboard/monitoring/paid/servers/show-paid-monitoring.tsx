@@ -1,4 +1,12 @@
-import { Clock, Cpu, HardDrive, Loader2, MemoryStick } from "lucide-react";
+import {
+	ArrowDownIcon,
+	ArrowUpIcon,
+	Clock,
+	Cpu,
+	HardDrive,
+	Loader2,
+	MemoryStick,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import {
 	Select,
@@ -59,6 +67,24 @@ interface Props {
 	token?: string;
 }
 
+const usageColor = (pct: number) => {
+	if (pct >= 85) return "bg-red-500";
+	if (pct >= 60) return "bg-amber-500";
+	return "bg-emerald-500";
+};
+
+const UsageBar = ({ value }: { value: number }) => {
+	const pct = Math.min(100, Math.max(0, value || 0));
+	return (
+		<div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-muted">
+			<div
+				className={`h-full rounded-full transition-all duration-700 ${usageColor(pct)}`}
+				style={{ width: `${pct}%` }}
+			/>
+		</div>
+	);
+};
+
 export const ShowPaidMonitoring = ({ serverId, BASE_URL, token }: Props) => {
 	const [historicalData, setHistoricalData] = useState<SystemMetrics[]>([]);
 	const [metrics, setMetrics] = useState<SystemMetrics>({} as SystemMetrics);
@@ -113,9 +139,9 @@ export const ShowPaidMonitoring = ({ serverId, BASE_URL, token }: Props) => {
 			uptime: metric.uptime,
 		}));
 
-		// @ts-ignore
+		// @ts-expect-error
 		setHistoricalData(formattedData);
-		// @ts-ignore
+		// @ts-expect-error
 		setMetrics(formattedData[formattedData.length - 1] || {});
 	}, [data]);
 
@@ -158,7 +184,17 @@ export const ShowPaidMonitoring = ({ serverId, BASE_URL, token }: Props) => {
 	return (
 		<div className="space-y-4 pt-5 pb-10 w-full md:px-4">
 			<div className="flex items-center justify-between flex-wrap	 gap-2">
-				<h2 className="text-2xl font-bold tracking-tight">System Monitoring</h2>
+				<div className="flex items-center gap-3">
+					<h2 className="text-2xl font-bold tracking-tight">
+						System Monitoring
+					</h2>
+					<span className="flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs text-muted-foreground">
+						<span className="relative flex size-2 rounded-full bg-emerald-500">
+							<span className="absolute inline-flex size-full animate-ping rounded-full bg-emerald-500 opacity-60" />
+						</span>
+						Live · every {Number.parseInt(refreshInterval) / 1000}s
+					</span>
+				</div>
 				<div className="flex items-center gap-4 flex-wrap">
 					<div>
 						<span className="text-sm text-muted-foreground">Data points:</span>
@@ -208,40 +244,78 @@ export const ShowPaidMonitoring = ({ serverId, BASE_URL, token }: Props) => {
 
 			{/* Stats Cards */}
 			<div className="grid gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-4">
-				<div className="rounded-lg border text-card-foreground shadow-xs p-6">
-					<div className="flex items-center gap-2">
-						<Clock className="h-4 w-4 text-muted-foreground" />
-						<h3 className="text-sm font-medium">Uptime</h3>
+				<div className="rounded-xl border text-card-foreground shadow-xs p-6">
+					<div className="flex items-center justify-between">
+						<div className="flex items-center gap-2">
+							<Clock className="h-4 w-4 text-muted-foreground" />
+							<h3 className="text-sm font-medium">Uptime</h3>
+						</div>
 					</div>
 					<p className="mt-2 text-2xl font-bold">
 						{formatUptime(metrics.uptime || 0)}
 					</p>
-				</div>
-
-				<div className="rounded-lg border text-card-foreground shadow-xs p-6">
-					<div className="flex items-center gap-2">
-						<Cpu className="h-4 w-4 text-muted-foreground" />
-						<h3 className="text-sm font-medium">CPU Usage</h3>
+					<div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground">
+						<span className="flex items-center gap-1">
+							<ArrowDownIcon className="size-3 text-emerald-500" />
+							{Number(metrics.networkIn || 0).toFixed(1)} MB
+						</span>
+						<span className="flex items-center gap-1">
+							<ArrowUpIcon className="size-3 text-blue-500" />
+							{Number(metrics.networkOut || 0).toFixed(1)} MB
+						</span>
+						<span>network</span>
 					</div>
-					<p className="mt-2 text-2xl font-bold">{metrics.cpu}%</p>
 				</div>
 
-				<div className="rounded-lg border text-card-foreground bg-transparent shadow-xs p-6">
-					<div className="flex items-center gap-2">
-						<MemoryStick className="h-4 w-4 text-muted-foreground" />
-						<h3 className="text-sm font-medium">Memory Usage</h3>
+				<div className="rounded-xl border text-card-foreground shadow-xs p-6">
+					<div className="flex items-center justify-between">
+						<div className="flex items-center gap-2">
+							<Cpu className="h-4 w-4 text-muted-foreground" />
+							<h3 className="text-sm font-medium">CPU Usage</h3>
+						</div>
+						<span className="text-xs text-muted-foreground">
+							{metrics.cpuCores} threads
+						</span>
 					</div>
 					<p className="mt-2 text-2xl font-bold">
-						{metrics.memUsedGB} GB / {metrics.memTotal} GB
+						{Number(metrics.cpu || 0).toFixed(1)}%
 					</p>
+					<UsageBar value={Number(metrics.cpu)} />
 				</div>
 
-				<div className="rounded-lg border text-card-foreground shadow-xs p-6">
-					<div className="flex items-center gap-2">
-						<HardDrive className="h-4 w-4 text-muted-foreground" />
-						<h3 className="text-sm font-medium">Disk Usage</h3>
+				<div className="rounded-xl border text-card-foreground bg-transparent shadow-xs p-6">
+					<div className="flex items-center justify-between">
+						<div className="flex items-center gap-2">
+							<MemoryStick className="h-4 w-4 text-muted-foreground" />
+							<h3 className="text-sm font-medium">Memory Usage</h3>
+						</div>
+						<span className="text-xs text-muted-foreground">
+							{Number(metrics.memUsed || 0).toFixed(0)}%
+						</span>
 					</div>
-					<p className="mt-2 text-2xl font-bold">{metrics.diskUsed}%</p>
+					<p className="mt-2 text-2xl font-bold">
+						{metrics.memUsedGB}{" "}
+						<span className="text-sm font-normal text-muted-foreground">
+							/ {metrics.memTotal} GB
+						</span>
+					</p>
+					<UsageBar value={Number(metrics.memUsed)} />
+				</div>
+
+				<div className="rounded-xl border text-card-foreground shadow-xs p-6">
+					<div className="flex items-center justify-between">
+						<div className="flex items-center gap-2">
+							<HardDrive className="h-4 w-4 text-muted-foreground" />
+							<h3 className="text-sm font-medium">Disk Usage</h3>
+						</div>
+						<span className="text-xs text-muted-foreground">
+							{metrics.totalDisk} GB total
+						</span>
+					</div>
+					<p className="mt-2 text-2xl font-bold">
+						{Number(metrics.diskUsed || 0).toFixed(1)}%
+					</p>
+					<UsageBar value={Number(metrics.diskUsed)} />
 				</div>
 			</div>
 
