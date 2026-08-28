@@ -1,8 +1,8 @@
 name: Dokploy Monitoring Build
 
+# Disabled in this fork (needs upstream Docker Hub secrets); run manually if ever needed.
 on:
-  push:
-    branches: [main, canary]
+  workflow_dispatch:
 
 env:
   IMAGE_NAME: dokploy/monitoring

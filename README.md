@@ -43,52 +43,39 @@ This is a customized build of Dokploy with extra features on top of the official
 
 ### Setting up this version
 
-This repo ships its own [install.sh](install.sh) that installs **this version directly** — it does everything the official installer does (Docker, Docker Swarm, Postgres, Traefik, secrets), but deploys *your* image and wires up the fork-aware updater automatically.
+The image for this version is **built automatically**: every push to the `canary` branch triggers the [build-image workflow](.github/workflows/build-image.yml), which publishes `ghcr.io/realsannimith/self-dokploy:custom` to GitHub Container Registry. No Docker Hub account and no local builds needed.
 
-**1. Build and push this fork's image** (from the repo root, on your machine):
+**One-time:** after the first workflow run, make the package public so servers can pull it — GitHub → your profile → **Packages** → `self-dokploy` → **Package settings** → **Change visibility** → Public.
+
+Then install on your VPS (as root) with one command — it does everything the official installer does (Docker, Docker Swarm, Postgres, Traefik, secrets), but deploys this version directly:
 
 ```bash
-cp apps/dokploy/.env.production.example .env.production
-cp apps/dokploy/.env.production.example apps/dokploy/.env.production
-docker build -t YOUR_DOCKERHUB_USER/dokploy:custom -f Dockerfile .
-docker push YOUR_DOCKERHUB_USER/dokploy:custom
+curl -sSL https://raw.githubusercontent.com/realsannimith/self-dokploy/canary/install.sh | bash
 ```
 
-**2. Install directly on your VPS** (as root):
+That's it — open `http://your-server-ip:3000`.
+
+**Already installed official Dokploy?** No need to reinstall — just switch the running service to this image:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/realsannimith/self-dokploy/canary/install.sh | DOKPLOY_IMAGE=YOUR_DOCKERHUB_USER/dokploy bash
-```
-
-That's it — open `http://your-server-ip:3000`. The tag defaults to `custom`; override it with `DOKPLOY_TAG=mytag` if you push a different one.
-
-**Already installed official Dokploy?** No need to reinstall — just switch the running service to your image:
-
-```bash
-docker service update --image YOUR_DOCKERHUB_USER/dokploy:custom --env-add DOKPLOY_IMAGE=YOUR_DOCKERHUB_USER/dokploy --env-add RELEASE_TAG=custom dokploy
+docker service update --image ghcr.io/realsannimith/self-dokploy:custom --env-add DOKPLOY_IMAGE=ghcr.io/realsannimith/self-dokploy --env-add RELEASE_TAG=custom dokploy
 ```
 
 ### Updates from your own image
 
-This version's in-app updater is fork-aware. When the `DOKPLOY_IMAGE` env var is set on the `dokploy` service (the installer sets it for you):
+This version's in-app updater is fork-aware. The installer sets `DOKPLOY_IMAGE` on the `dokploy` service, which makes:
 
-- The **update check** (Settings → Web Server) compares the running image digest against `DOKPLOY_IMAGE:RELEASE_TAG` on Docker Hub — your repository, not the official one.
-- The **Update** button pulls and redeploys *your* image, so you never get switched back to the official build.
+- The **update check** (Settings → Web Server) compare the running image digest against your image on GitHub Container Registry — not the official `dokploy/dokploy`.
+- The **Update** button pull and redeploy *your* image, so you never get switched back to the official build.
 
-To ship a new build, just rebuild and push the same tag, then click Update in the UI (or wait for the auto update check):
-
-```bash
-docker build -t YOUR_DOCKERHUB_USER/dokploy:custom -f Dockerfile . && docker push YOUR_DOCKERHUB_USER/dokploy:custom
-```
-
-You can also update from the command line on the VPS:
+So the whole update flow is: **push code to `canary` → wait for the build workflow → click Update in the UI**. You can also update from the command line on the VPS:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/realsannimith/self-dokploy/canary/install.sh | DOKPLOY_IMAGE=YOUR_DOCKERHUB_USER/dokploy bash -s update
+curl -sSL https://raw.githubusercontent.com/realsannimith/self-dokploy/canary/install.sh | bash -s update
 ```
 
 > [!NOTE]
-> The update check uses the public Docker Hub API, so your image repository must be public. Without `DOKPLOY_IMAGE` set, the updater behaves exactly like official Dokploy.
+> The image package must stay public for the update check and pulls to work. To host the image elsewhere, set `DOKPLOY_IMAGE=youruser/dokploy` (and optionally `DOKPLOY_TAG`) when running `install.sh` — Docker Hub and any OCI registry are supported. Without `DOKPLOY_IMAGE` set on the service, the updater behaves exactly like official Dokploy.
 
 For local development instead, follow the [Contributing Guide](CONTRIBUTING.md) (`pnpm install`, `pnpm run dokploy:setup`, `pnpm run dokploy:dev`).
 

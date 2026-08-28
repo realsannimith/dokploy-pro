@@ -1,8 +1,8 @@
 name: Dokploy Docker Build
 
+# Disabled in this fork (needs upstream Docker Hub secrets); the custom image
+# is built by build-image.yml instead. Run manually if ever needed.
 on:
-  push:
-    branches: [main, canary, "fix/re-apply-database-migration-fix"]
   workflow_dispatch:
 
 env:

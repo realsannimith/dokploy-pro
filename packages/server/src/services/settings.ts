@@ -37,6 +37,54 @@ export const getDokployImage = () => {
 
 export const isCustomDokployImage = () => Boolean(process.env.DOKPLOY_IMAGE);
 
+/** Fetches an image tag's manifest digest from any OCI registry (ghcr.io,
+ * Docker Hub, ...) using the anonymous bearer-token flow. */
+export const getRemoteImageDigest = async (image: string, tag: string) => {
+	const firstSegment = image.split("/")[0] ?? "";
+	const hasRegistryHost =
+		firstSegment.includes(".") || firstSegment.includes(":");
+	const registry = hasRegistryHost ? firstSegment : "registry-1.docker.io";
+	const repository = hasRegistryHost
+		? image.slice(firstSegment.length + 1)
+		: image;
+
+	const manifestUrl = `https://${registry}/v2/${repository}/manifests/${tag}`;
+	const accept = [
+		"application/vnd.docker.distribution.manifest.list.v2+json",
+		"application/vnd.oci.image.index.v1+json",
+		"application/vnd.docker.distribution.manifest.v2+json",
+		"application/vnd.oci.image.manifest.v1+json",
+	].join(", ");
+
+	let response = await fetch(manifestUrl, {
+		method: "HEAD",
+		headers: { Accept: accept },
+	});
+
+	if (response.status === 401) {
+		const challenge = response.headers.get("www-authenticate") ?? "";
+		const realm = /realm="([^"]+)"/.exec(challenge)?.[1];
+		if (!realm) return null;
+		const service = /service="([^"]+)"/.exec(challenge)?.[1];
+		const tokenUrl = new URL(realm);
+		if (service) tokenUrl.searchParams.set("service", service);
+		tokenUrl.searchParams.set("scope", `repository:${repository}:pull`);
+
+		const tokenResponse = await fetch(tokenUrl);
+		if (!tokenResponse.ok) return null;
+		const { token } = (await tokenResponse.json()) as { token?: string };
+		if (!token) return null;
+
+		response = await fetch(manifestUrl, {
+			method: "HEAD",
+			headers: { Accept: accept, Authorization: `Bearer ${token}` },
+		});
+	}
+
+	if (!response.ok) return null;
+	return response.headers.get("docker-content-digest");
+};
+
 /** Returns Dokploy docker service image digest */
 export const getServiceImageDigest = async () => {
 	const { stdout } = await execAsync(
@@ -57,6 +105,25 @@ export const getUpdateData = async (
 	currentVersion: string,
 ): Promise<IUpdateData> => {
 	try {
+		const currentImageTag = getDokployImageTag();
+
+		// Custom fork images track a moving tag on an arbitrary registry
+		// (ghcr.io, Docker Hub, ...), so compare manifest digests directly.
+		if (isCustomDokployImage()) {
+			const currentDigest = await getServiceImageDigest();
+			const latestDigest = await getRemoteImageDigest(
+				getDokployImage(),
+				currentImageTag,
+			);
+			if (!latestDigest) {
+				return DEFAULT_UPDATE_DATA;
+			}
+			return {
+				latestVersion: currentImageTag,
+				updateAvailable: currentDigest !== latestDigest,
+			};
+		}
+
 		const baseUrl = `https://hub.docker.com/v2/repositories/${getDokployImage()}/tags`;
 		let url: string | null = `${baseUrl}?page_size=100`;
 		let allResults: { digest: string; name: string }[] = [];
@@ -77,16 +144,11 @@ export const getUpdateData = async (
 			url = data?.next;
 		}
 
-		const currentImageTag = getDokployImageTag();
-
-		// Special handling for canary/feature branches and custom fork images:
-		// these track a moving tag, so compare digests for the current tag
-		// instead of semver version tags.
-		if (
-			currentImageTag === "canary" ||
-			currentImageTag === "feature" ||
-			isCustomDokployImage()
-		) {
+		// Special handling for canary and feature branches
+		// For development versions (canary/feature), don't perform update checks
+		// These are unstable versions that change frequently, and users on these
+		// branches are expected to manually manage updates
+		if (currentImageTag === "canary" || currentImageTag === "feature") {
 			const currentDigest = await getServiceImageDigest();
 			const latestDigest = allResults.find(
 				(t) => t.name === currentImageTag,

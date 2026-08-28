@@ -1,9 +1,8 @@
 name: Auto PR to main when version changes
 
+# Disabled in this fork (upstream release automation); run manually if ever needed.
 on:
-  push:
-    branches:
-      - canary
+  workflow_dispatch:
 
 permissions:
   contents: write

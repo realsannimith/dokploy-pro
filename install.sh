@@ -2,38 +2,27 @@
 
 # Installer for this custom Dokploy build.
 #
-# Based on the official https://dokploy.com/install.sh, but deploys YOUR image
-# instead of dokploy/dokploy, and wires up DOKPLOY_IMAGE / RELEASE_TAG so the
-# in-app updater tracks your Docker Hub repository.
+# Based on the official https://dokploy.com/install.sh, but deploys this
+# fork's image (auto-built to GitHub Container Registry by the build-image
+# workflow) and wires up DOKPLOY_IMAGE / RELEASE_TAG so the in-app updater
+# tracks it.
 #
 # Usage:
-#   DOKPLOY_IMAGE=youruser/dokploy bash install.sh
-#   DOKPLOY_IMAGE=youruser/dokploy DOKPLOY_TAG=custom bash install.sh
-#   curl -sSL https://raw.githubusercontent.com/realsannimith/self-dokploy/canary/install.sh | DOKPLOY_IMAGE=youruser/dokploy bash
+#   curl -sSL https://raw.githubusercontent.com/realsannimith/self-dokploy/canary/install.sh | bash
 #
 # To update an existing install to the newest pushed build:
-#   DOKPLOY_IMAGE=youruser/dokploy bash install.sh update
+#   curl -sSL https://raw.githubusercontent.com/realsannimith/self-dokploy/canary/install.sh | bash -s update
+#
+# Override the image or tag if you host the image somewhere else:
+#   DOKPLOY_IMAGE=youruser/dokploy DOKPLOY_TAG=custom bash install.sh
 
 # Docker version to install and maintain
 DOCKER_VERSION="28.5.0"
 
-# The Docker Hub repository of your custom Dokploy image.
-DOKPLOY_IMAGE="${DOKPLOY_IMAGE:-}"
-# The tag of your custom image. Pushing a new build of this tag makes the
-# in-app "Update" button light up.
+# This fork's image, auto-built by .github/workflows/build-image.yml.
+DOKPLOY_IMAGE="${DOKPLOY_IMAGE:-ghcr.io/realsannimith/self-dokploy}"
+# Pushing a new build of this tag makes the in-app "Update" button light up.
 DOKPLOY_TAG="${DOKPLOY_TAG:-custom}"
-
-require_image() {
-    if [ -z "$DOKPLOY_IMAGE" ]; then
-        echo "Error: DOKPLOY_IMAGE is not set." >&2
-        echo "Set it to the Docker Hub repository of your custom Dokploy image, e.g.:" >&2
-        echo "  DOKPLOY_IMAGE=youruser/dokploy bash install.sh" >&2
-        echo "Build and push it first from the repo root:" >&2
-        echo "  docker build -t youruser/dokploy:${DOKPLOY_TAG} -f Dockerfile ." >&2
-        echo "  docker push youruser/dokploy:${DOKPLOY_TAG}" >&2
-        exit 1
-    fi
-}
 
 # Function to detect if running in Proxmox LXC container
 is_proxmox_lxc() {
@@ -82,7 +71,6 @@ generate_random_password() {
 }
 
 install_dokploy() {
-    require_image
     DOCKER_IMAGE="${DOKPLOY_IMAGE}:${DOKPLOY_TAG}"
 
     echo "Installing custom Dokploy image: ${DOCKER_IMAGE}"
@@ -347,7 +335,6 @@ install_dokploy() {
 }
 
 update_dokploy() {
-    require_image
     DOCKER_IMAGE="${DOKPLOY_IMAGE}:${DOKPLOY_TAG}"
 
     echo "Updating Dokploy to custom image: ${DOCKER_IMAGE}"

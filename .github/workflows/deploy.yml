@@ -1,8 +1,7 @@
 name: Build Docker images
 
+# Disabled in this fork (needs upstream secrets); run manually if ever needed.
 on:
-  push:
-    branches: [main, canary]
   workflow_dispatch:
 
 jobs:
