@@ -7,6 +7,7 @@ import {
 	findUserById,
 	getAccessibleServerIds,
 	getPublicIpWithFallback,
+	getWebServerSettings,
 	haveActiveServices,
 	IS_CLOUD,
 	redactServerSshKey,
@@ -48,6 +49,67 @@ import {
 	server,
 } from "@/server/db/schema";
 import { applyDockerCleanupSchedule } from "@/server/utils/docker-cleanup";
+
+type MetricsSession = { userId: string; activeOrganizationId: string };
+
+const resolveMetricsEndpoint = async (
+	input: { serverId?: string; url?: string; token?: string },
+	session: MetricsSession,
+) => {
+	if (input.url) {
+		return { url: input.url, token: input.token ?? "" };
+	}
+
+	if (input.serverId) {
+		const targetServer = await findServerById(input.serverId);
+		const accessibleIds = await getAccessibleServerIds(session);
+		if (
+			targetServer.organizationId !== session.activeOrganizationId ||
+			!accessibleIds.has(input.serverId)
+		) {
+			throw new TRPCError({
+				code: "UNAUTHORIZED",
+				message: "You are not authorized to access this server",
+			});
+		}
+
+		const metrics = targetServer.metricsConfig?.server;
+		if (!metrics?.token) {
+			throw new TRPCError({
+				code: "PRECONDITION_FAILED",
+				message: `Monitoring is not enabled on "${targetServer.name}". Go to Settings > Servers > Setup Server > Monitoring and save the configuration to start collecting metrics.`,
+			});
+		}
+
+		return {
+			url: `http://${targetServer.ipAddress}:${metrics.port}/metrics`,
+			token: metrics.token,
+		};
+	}
+
+	const settings = await getWebServerSettings();
+	const metrics = settings?.metricsConfig?.server;
+	if (!metrics?.token) {
+		throw new TRPCError({
+			code: "PRECONDITION_FAILED",
+			message:
+				"Monitoring is not enabled on the Dokploy server. Go to Settings > Server > Monitoring and save the configuration to start collecting metrics.",
+		});
+	}
+
+	if (!settings?.serverIp) {
+		throw new TRPCError({
+			code: "PRECONDITION_FAILED",
+			message:
+				"The Dokploy server IP is not set, so the metrics service cannot be reached. Set it in Settings > Server > Web Server.",
+		});
+	}
+
+	return {
+		url: `http://${settings.serverIp}:${metrics.port}/metrics`,
+		token: metrics.token,
+	};
+};
 
 export const serverRouter = createTRPCRouter({
 	create: withPermission("server", "create")
@@ -518,21 +580,55 @@ export const serverRouter = createTRPCRouter({
 			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
 		};
 	}),
+	monitoringTargets: withPermission("monitoring", "read").query(
+		async ({ ctx }) => {
+			const accessibleIds = await getAccessibleServerIds(ctx.session);
+
+			const servers = await db
+				.select({
+					serverId: server.serverId,
+					name: server.name,
+					ipAddress: server.ipAddress,
+					serverType: server.serverType,
+					serverStatus: server.serverStatus,
+					metricsConfig: server.metricsConfig,
+				})
+				.from(server)
+				.where(eq(server.organizationId, ctx.session.activeOrganizationId))
+				.orderBy(desc(server.createdAt));
+
+			return servers
+				.filter(
+					(s) =>
+						accessibleIds.has(s.serverId) &&
+						s.serverType === "deploy" &&
+						s.serverStatus === "active",
+				)
+				.map((s) => ({
+					serverId: s.serverId,
+					name: s.name,
+					ipAddress: s.ipAddress,
+					monitoringEnabled: Boolean(s.metricsConfig?.server?.token),
+				}));
+		},
+	),
 	getServerMetrics: withPermission("monitoring", "read")
 		.input(
 			z.object({
-				url: z.string(),
-				token: z.string(),
+				serverId: z.string().optional(),
+				url: z.string().optional(),
+				token: z.string().optional(),
 				dataPoints: z.string(),
 			}),
 		)
-		.query(async ({ input }) => {
+		.query(async ({ input, ctx }) => {
+			const endpoint = await resolveMetricsEndpoint(input, ctx.session);
 			try {
-				const url = new URL(input.url);
+				const url = new URL(endpoint.url);
 				url.searchParams.append("limit", input.dataPoints);
 				const response = await fetch(url.toString(), {
 					headers: {
-						Authorization: `Bearer ${input.token}`,
+						Authorization: `Bearer ${endpoint.token}`,
 					},
 				});
 				if (!response.ok) {

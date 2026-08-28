@@ -1,15 +1,22 @@
 import { BarChartHorizontalBigIcon } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogTrigger } from "@/components/ui/dialog";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+	DialogTrigger,
+} from "@/components/ui/dialog";
 import { ShowPaidMonitoring } from "../../monitoring/paid/servers/show-paid-monitoring";
 
 interface Props {
-	url: string;
-	token: string;
+	serverId: string;
+	serverName: string;
 }
 
-export const ShowMonitoringModal = ({ url, token }: Props) => {
+export const ShowMonitoringModal = ({ serverId, serverName }: Props) => {
 	const [isOpen, setIsOpen] = useState(false);
 
 	return (
@@ -20,8 +27,12 @@ export const ShowMonitoringModal = ({ url, token }: Props) => {
 				</Button>
 			</DialogTrigger>
 			<DialogContent className="sm:max-w-7xl  ">
+				<DialogHeader>
+					<DialogTitle>Monitoring</DialogTitle>
+					<DialogDescription>Resource usage of {serverName}</DialogDescription>
+				</DialogHeader>
 				<div className="flex gap-4 py-4 w-full">
-					<ShowPaidMonitoring BASE_URL={url} token={token} />
+					<ShowPaidMonitoring serverId={serverId} />
 				</div>
 			</DialogContent>
 		</Dialog>

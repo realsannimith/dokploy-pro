@@ -53,15 +53,13 @@ interface SystemMetrics {
 }
 
 interface Props {
+	/** Remote server to read metrics from. Omit to read the Dokploy server. */
+	serverId?: string;
 	BASE_URL?: string;
 	token?: string;
 }
 
-export const ShowPaidMonitoring = ({
-	BASE_URL = process.env.NEXT_PUBLIC_METRICS_URL ||
-		"http://localhost:3001/metrics",
-	token = process.env.NEXT_PUBLIC_METRICS_TOKEN || "my-token",
-}: Props) => {
+export const ShowPaidMonitoring = ({ serverId, BASE_URL, token }: Props) => {
 	const [historicalData, setHistoricalData] = useState<SystemMetrics[]>([]);
 	const [metrics, setMetrics] = useState<SystemMetrics>({} as SystemMetrics);
 	const [dataPoints, setDataPoints] =
@@ -74,6 +72,7 @@ export const ShowPaidMonitoring = ({
 		error: queryError,
 	} = api.server.getServerMetrics.useQuery(
 		{
+			serverId,
 			url: BASE_URL,
 			token,
 			dataPoints,
@@ -84,6 +83,11 @@ export const ShowPaidMonitoring = ({
 			enabled: true,
 		},
 	);
+
+	useEffect(() => {
+		setHistoricalData([]);
+		setMetrics({} as SystemMetrics);
+	}, [serverId, BASE_URL]);
 
 	useEffect(() => {
 		if (!data) return;
@@ -143,7 +147,9 @@ export const ShowPaidMonitoring = ({
 							? queryError.message
 							: "Failed to fetch metrics, Please check your monitoring Instance is Configured correctly."}
 					</p>
-					<p className="text-sm text-muted-foreground">URL: {BASE_URL}</p>
+					{BASE_URL && (
+						<p className="text-sm text-muted-foreground">URL: {BASE_URL}</p>
+					)}
 				</div>
 			</div>
 		);

@@ -45,6 +45,7 @@ const defaultData = {
 interface Props {
 	appName: string;
 	appType?: "application" | "stack" | "docker-compose";
+	showHeader?: boolean;
 }
 export interface DockerStats {
 	cpu: {
@@ -119,6 +120,7 @@ export const convertMemoryToBytes = (
 export const ContainerFreeMonitoring = ({
 	appName,
 	appType = "application",
+	showHeader = true,
 }: Props) => {
 	const { data } = api.application.readAppMonitoring.useQuery(
 		{ appName },
@@ -204,14 +206,18 @@ export const ContainerFreeMonitoring = ({
 
 	return (
 		<div className="rounded-xl bg-background flex flex-col gap-4">
-			<header className="flex items-center justify-between">
-				<div className="space-y-1">
-					<h1 className="text-2xl font-semibold tracking-tight">Monitoring</h1>
-					<p className="text-sm text-muted-foreground">
-						Watch the usage of your server in the current app
-					</p>
-				</div>
-			</header>
+			{showHeader && (
+				<header className="flex items-center justify-between">
+					<div className="space-y-1">
+						<h1 className="text-2xl font-semibold tracking-tight">
+							Monitoring
+						</h1>
+						<p className="text-sm text-muted-foreground">
+							Watch the usage of your server in the current app
+						</p>
+					</div>
+				</header>
+			)}
 
 			<div className="grid gap-6 lg:grid-cols-2">
 				<Card className="bg-background">

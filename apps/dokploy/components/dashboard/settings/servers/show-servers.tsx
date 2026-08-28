@@ -304,18 +304,15 @@ export const ShowServers = () => {
 																					</Tooltip>
 																				)}
 
-																				{isCloud &&
+																				{permissions?.monitoring.read &&
 																					server.sshKeyId &&
 																					!isBuildServer && (
 																						<Tooltip>
 																							<TooltipTrigger asChild>
 																								<div>
 																									<ShowMonitoringModal
-																										url={`http://${server.ipAddress}:${server?.metricsConfig?.server?.port}/metrics`}
-																										token={
-																											server?.metricsConfig
-																												?.server?.token
-																										}
+																										serverId={server.serverId}
+																										serverName={server.name}
 																									/>
 																								</div>
 																							</TooltipTrigger>
