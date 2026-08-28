@@ -22,11 +22,11 @@ export const OnboardingLayout = ({ children, leftPanel }: Props) => {
 
 	return (
 		<div className="container relative min-h-svh flex-col items-center justify-center flex lg:max-w-none lg:grid lg:grid-cols-2 lg:px-0 w-full">
-			<div className="relative hidden h-full flex-col  p-10 text-primary dark:border-r lg:flex">
-				<div className="absolute inset-0 bg-muted" />
+			<div className="relative hidden h-full flex-col border-r border-border p-10 text-foreground lg:flex">
+				<div className="mesh-gradient absolute inset-0 bg-secondary" />
 				<Link
 					href="/"
-					className="relative z-20 flex items-center text-lg font-medium gap-4  text-primary"
+					className="relative z-20 flex items-center gap-4 text-lg font-medium text-foreground"
 				>
 					<Logo className="size-10" logoUrl={logoUrl} />
 					{appName}
@@ -34,7 +34,9 @@ export const OnboardingLayout = ({ children, leftPanel }: Props) => {
 				<div className="relative z-20 mt-auto">
 					{leftPanel ?? (
 						<blockquote className="space-y-2">
-							<p className="text-lg text-primary">{appDescription}</p>
+							<p className="display-md max-w-md text-foreground">
+								{appDescription}
+							</p>
 						</blockquote>
 					)}
 				</div>

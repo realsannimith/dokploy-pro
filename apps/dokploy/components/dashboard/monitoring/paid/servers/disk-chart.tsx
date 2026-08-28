@@ -1,4 +1,3 @@
-import { HardDrive } from "lucide-react";
 import {
 	Label,
 	PolarGrid,
@@ -11,7 +10,6 @@ import {
 	Card,
 	CardContent,
 	CardDescription,
-	CardFooter,
 	CardHeader,
 	CardTitle,
 } from "@/components/ui/card";
@@ -43,10 +41,12 @@ export function DiskChart({ data }: RadialChartProps) {
 	const endAngle = (diskUsed * 360) / 100;
 
 	return (
-		<Card className="flex flex-col bg-transparent">
-			<CardHeader className="items-center border-b pb-5">
-				<CardTitle>Disk</CardTitle>
-				<CardDescription>Storage Space</CardDescription>
+		<Card className="flex flex-col">
+			<CardHeader className="border-b border-border py-4">
+				<CardTitle className="eyebrow">Disk</CardTitle>
+				<CardDescription className="font-mono text-xs">
+					{usedDiskGB.toFixed(1)} / {totalDiskGB.toFixed(1)} GB
+				</CardDescription>
 			</CardHeader>
 			<CardContent className="flex-1 pb-0">
 				<ChartContainer
@@ -107,14 +107,6 @@ export function DiskChart({ data }: RadialChartProps) {
 					</RadialBarChart>
 				</ChartContainer>
 			</CardContent>
-			<CardFooter className="flex-col gap-2 text-sm">
-				<div className="flex items-center gap-2 font-medium leading-none">
-					<HardDrive className="h-4 w-4" /> {usedDiskGB.toFixed(1)} GB used
-				</div>
-				<div className="leading-none text-muted-foreground">
-					Of {totalDiskGB.toFixed(1)} GB total
-				</div>
-			</CardFooter>
 		</Card>
 	);
 }

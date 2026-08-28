@@ -8,21 +8,23 @@ interface Props extends React.ComponentPropsWithoutRef<"div"> {
 
 const iconMap = {
 	info: {
-		className: "bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400",
+		className: "border-link/25 bg-link/8",
+		iconClassName: "text-link",
 		icon: Info,
 	},
 	success: {
-		className:
-			"bg-green-50 dark:bg-green-950 text-green-600 dark:text-green-400",
+		className: "border-brand-teal/30 bg-brand-teal/10",
+		iconClassName: "text-brand-teal",
 		icon: CheckCircle2,
 	},
 	warning: {
-		className:
-			"bg-orange-50 dark:bg-orange-950 text-orange-600 dark:text-orange-400",
+		className: "border-warning/30 bg-warning/10",
+		iconClassName: "text-warning",
 		icon: AlertCircle,
 	},
 	error: {
-		className: "bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400",
+		className: "border-destructive/25 bg-destructive/8",
+		iconClassName: "text-destructive",
 		icon: AlertTriangle,
 	},
 };
@@ -34,21 +36,25 @@ export function AlertBlock({
 	className,
 	...props
 }: Props) {
-	const { className: iconClassName, icon: Icon } = iconMap[type];
+	const {
+		className: blockClassName,
+		iconClassName,
+		icon: Icon,
+	} = iconMap[type];
 	return (
 		<div
 			{...props}
 			className={cn(
-				"flex items-start flex-row gap-4 rounded-lg p-2",
-				iconClassName,
+				"flex flex-row items-start gap-3 rounded-lg border p-3",
+				blockClassName,
 				className,
 			)}
 		>
 			<div className="shrink-0 mt-0.5">
-				{icon || <Icon className="text-current" />}
+				{icon || <Icon className={cn("size-4", iconClassName)} />}
 			</div>
 			<div className="flex-1 min-w-0">
-				<span className="text-sm text-current wrap-break-word overflow-wrap-anywhere whitespace-pre-wrap">
+				<span className="text-sm text-foreground wrap-break-word overflow-wrap-anywhere whitespace-pre-wrap">
 					{children}
 				</span>
 			</div>

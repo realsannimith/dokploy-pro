@@ -33,6 +33,21 @@ const decryptionKeys = encryptionSecret
 export const exportEncryptionKeys = () =>
 	decryptionKeys.map((key) => key.toString("hex")).join("\n");
 
+// When importing data from another instance, its stored secrets were
+// encrypted with keys derived from that instance's env secrets. Deriving the
+// same keys here lets the imported values decrypt via the restored-key
+// fallback below.
+export const deriveKeysFromSecrets = (secrets: (string | undefined)[]) => {
+	const keys = new Set<string>();
+	for (const secret of secrets) {
+		const trimmed = secret?.trim();
+		if (trimmed) {
+			keys.add(deriveKey(trimmed).toString("hex"));
+		}
+	}
+	return [...keys];
+};
+
 let restoredKeys: Buffer[] | undefined;
 
 // A backup created with "include encryption key" places the original

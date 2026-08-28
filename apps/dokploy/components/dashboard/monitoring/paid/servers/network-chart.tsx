@@ -39,12 +39,12 @@ export function NetworkChart({ data }: NetworkChartProps) {
 	const latestData = data[data.length - 1] || {};
 
 	return (
-		<Card className="bg-transparent">
-			<CardHeader className="border-b py-5">
-				<CardTitle>Network</CardTitle>
-				<CardDescription>
-					Network Total: ↑ {formatNetworkGB(latestData.networkOut)} GB ↓{" "}
-					{formatNetworkGB(latestData.networkIn)} GB (since Boot)
+		<Card>
+			<CardHeader className="border-b border-border py-4">
+				<CardTitle className="eyebrow">Network</CardTitle>
+				<CardDescription className="font-mono text-xs">
+					↑ {formatNetworkGB(latestData.networkOut)} · ↓{" "}
+					{formatNetworkGB(latestData.networkIn)} GB
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="px-2 pt-4 sm:px-6 sm:pt-6">

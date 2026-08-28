@@ -5,6 +5,7 @@ import type { ReactElement } from "react";
 import superjson from "superjson";
 import { ShowBackups } from "@/components/dashboard/database/backups/show-backups";
 import { SetupMonitoring } from "@/components/dashboard/settings/servers/setup-monitoring";
+import { TransferInstance } from "@/components/dashboard/settings/transfer-instance";
 import { WebDomain } from "@/components/dashboard/settings/web-domain";
 import { WebServer } from "@/components/dashboard/settings/web-server";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
@@ -35,6 +36,7 @@ const Page = () => {
 						/>
 					</Card>
 				</div>
+				<TransferInstance />
 			</div>
 		</div>
 	);

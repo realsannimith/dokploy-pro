@@ -28,12 +28,11 @@ export function MemoryChart({ data }: MemoryChartProps) {
 	const latestData = data[data.length - 1] || {};
 
 	return (
-		<Card className="bg-transparent">
-			<CardHeader className="border-b py-5">
-				<CardTitle>Memory</CardTitle>
-				<CardDescription>
-					Memory Usage: {latestData.memUsedGB} GB of {latestData.memTotal} GB (
-					{latestData.memUsed}%)
+		<Card>
+			<CardHeader className="border-b border-border py-4">
+				<CardTitle className="eyebrow">Memory</CardTitle>
+				<CardDescription className="font-mono text-xs">
+					{latestData.memUsedGB} / {latestData.memTotal} GB
 				</CardDescription>
 			</CardHeader>
 			<CardContent className="px-2 pt-4 sm:px-6 sm:pt-6">

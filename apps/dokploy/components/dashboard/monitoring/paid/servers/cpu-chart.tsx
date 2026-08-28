@@ -9,8 +9,6 @@ import {
 import {
 	type ChartConfig,
 	ChartContainer,
-	ChartLegend,
-	ChartLegendContent,
 	ChartTooltip,
 } from "@/components/ui/chart";
 import { formatTimestamp } from "@/lib/utils";
@@ -30,10 +28,12 @@ export function CPUChart({ data }: CPUChartProps) {
 	const latestData = data[data.length - 1] || {};
 
 	return (
-		<Card className="bg-transparent">
-			<CardHeader className="border-b py-5">
-				<CardTitle>CPU</CardTitle>
-				<CardDescription>CPU Usage: {latestData.cpu}%</CardDescription>
+		<Card>
+			<CardHeader className="border-b border-border py-4">
+				<CardTitle className="eyebrow">CPU</CardTitle>
+				<CardDescription className="font-mono text-xs">
+					{latestData.cpu}%
+				</CardDescription>
 			</CardHeader>
 			<CardContent className="px-2 pt-4 sm:px-6 sm:pt-6">
 				<ChartContainer
@@ -102,11 +102,6 @@ export function CPUChart({ data }: CPUChartProps) {
 							fill="url(#fillCPU)"
 							stroke="hsl(var(--chart-1))"
 							strokeWidth={2}
-						/>
-						<ChartLegend
-							content={<ChartLegendContent />}
-							verticalAlign="bottom"
-							align="center"
 						/>
 					</AreaChart>
 				</ChartContainer>
