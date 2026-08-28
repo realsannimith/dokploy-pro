@@ -29,6 +29,14 @@ export const getDokployImageTag = () => {
 	return process.env.RELEASE_TAG || "latest";
 };
 
+/** Returns the Dokploy docker image repository. Set DOKPLOY_IMAGE to track a
+ * custom fork image (e.g. "youruser/dokploy") instead of the official one. */
+export const getDokployImage = () => {
+	return process.env.DOKPLOY_IMAGE || "dokploy/dokploy";
+};
+
+export const isCustomDokployImage = () => Boolean(process.env.DOKPLOY_IMAGE);
+
 /** Returns Dokploy docker service image digest */
 export const getServiceImageDigest = async () => {
 	const { stdout } = await execAsync(
@@ -49,8 +57,7 @@ export const getUpdateData = async (
 	currentVersion: string,
 ): Promise<IUpdateData> => {
 	try {
-		const baseUrl =
-			"https://hub.docker.com/v2/repositories/dokploy/dokploy/tags";
+		const baseUrl = `https://hub.docker.com/v2/repositories/${getDokployImage()}/tags`;
 		let url: string | null = `${baseUrl}?page_size=100`;
 		let allResults: { digest: string; name: string }[] = [];
 
@@ -72,11 +79,14 @@ export const getUpdateData = async (
 
 		const currentImageTag = getDokployImageTag();
 
-		// Special handling for canary and feature branches
-		// For development versions (canary/feature), don't perform update checks
-		// These are unstable versions that change frequently, and users on these
-		// branches are expected to manually manage updates
-		if (currentImageTag === "canary" || currentImageTag === "feature") {
+		// Special handling for canary/feature branches and custom fork images:
+		// these track a moving tag, so compare digests for the current tag
+		// instead of semver version tags.
+		if (
+			currentImageTag === "canary" ||
+			currentImageTag === "feature" ||
+			isCustomDokployImage()
+		) {
 			const currentDigest = await getServiceImageDigest();
 			const latestDigest = allResults.find(
 				(t) => t.name === currentImageTag,
@@ -291,11 +301,15 @@ export const reloadDockerResource = async (
 		if (resourceName === "dokploy") {
 			const currentImageTag = getDokployImageTag();
 			let imageTag = version;
-			if (currentImageTag === "canary" || currentImageTag === "feature") {
+			if (
+				currentImageTag === "canary" ||
+				currentImageTag === "feature" ||
+				isCustomDokployImage()
+			) {
 				imageTag = currentImageTag;
 			}
 
-			command = `docker service update --force --image dokploy/dokploy:${imageTag} ${resourceName}`;
+			command = `docker service update --force --image ${getDokployImage()}:${imageTag} ${resourceName}`;
 		} else {
 			command = `docker service update --force ${resourceName}`;
 		}
