@@ -17,6 +17,8 @@ export interface ComposerQuestion {
 	label?: string;
 	placeholder?: string;
 	initialValue?: string;
+	/** Render typed characters as bullets and keep the value out of sight. */
+	maskInput?: boolean;
 	tone?: "primary" | "warning";
 	allowMultiline?: boolean;
 	recordHistory?: boolean;
@@ -87,7 +89,10 @@ export const renderComposerView = (
 		characters(prefixPlain).length,
 	);
 	const inputWidth = Math.max(1, contentWidth - prefixWidth);
-	const input = layoutValue(value, cursor, inputWidth);
+	const displayValue = question.maskInput
+		? "•".repeat(characters(value).length)
+		: value;
+	const input = layoutValue(displayValue, cursor, inputWidth);
 	const prefix = `${promptText(colors)}${
 		question.tone === "warning" ? warningText(label, colors) : label
 	}`;

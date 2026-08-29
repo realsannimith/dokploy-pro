@@ -2,6 +2,11 @@
 
 import process from "node:process";
 import type { AgentToolConfig } from "@dokploy/server/db/schema/agent";
+import { fetchAiModels } from "@dokploy/server/utils/ai/fetch-ai-models";
+import {
+	AI_PROVIDER_PRESETS,
+	isKeyOptional,
+} from "@dokploy/server/utils/ai/providers";
 import packageInfo from "./package.json";
 import { HarnessComposer } from "./server/agent/terminal-composer";
 import {
@@ -30,16 +35,30 @@ const HISTORY_PREVIEW_LIMIT = 8;
 interface HarnessAgent {
 	agentId: string;
 	organizationId: string;
+	aiId: string | null;
 	name: string;
 	model: string | null;
 	isEnabled: boolean;
 	toolConfig: AgentToolConfig;
 	ai: {
+		aiId: string;
 		name: string;
+		apiUrl: string;
+		apiKey: string;
 		model: string;
 		isEnabled: boolean;
 	} | null;
 	organization: { id: string; name: string };
+}
+
+interface HarnessProvider {
+	aiId: string;
+	name: string;
+	apiUrl: string;
+	apiKey: string;
+	model: string;
+	isEnabled: boolean;
+	organizationId: string;
 }
 
 let db: typeof import("@dokploy/server/db").db;
@@ -55,6 +74,9 @@ let findOrCreateConversation: typeof import("@dokploy/server/services/agent").fi
 let recordAgentSkillUse: typeof import("@dokploy/server/services/agent").recordAgentSkillUse;
 let renameConversation: typeof import("@dokploy/server/services/agent").renameConversation;
 let undoLastConversationExchange: typeof import("@dokploy/server/services/agent").undoLastConversationExchange;
+let updateAgentSettings: typeof import("@dokploy/server/services/agent").updateAgentSettings;
+let getAiSettingsByOrganizationId: typeof import("@dokploy/server/services/ai").getAiSettingsByOrganizationId;
+let saveAiSettings: typeof import("@dokploy/server/services/ai").saveAiSettings;
 let resolvePendingAction: typeof import("./server/agent/pending").resolvePendingAction;
 let runAgent: typeof import("./server/agent/run-agent").runAgent;
 let LEARN_SKILL_CONTEXT: typeof import("./server/agent/skills").LEARN_SKILL_CONTEXT;
@@ -63,10 +85,11 @@ let AGENT_TOOL_META: typeof import("./server/agent/tools").AGENT_TOOL_META;
 let resolveToolSetting: typeof import("./server/agent/tools").resolveToolSetting;
 
 const loadRuntime = async () => {
-	const [dbModule, services, pending, runner, skills, tools] =
+	const [dbModule, services, aiServices, pending, runner, skills, tools] =
 		await Promise.all([
 			import("@dokploy/server/db"),
 			import("@dokploy/server/services/agent"),
+			import("@dokploy/server/services/ai"),
 			import("./server/agent/pending"),
 			import("./server/agent/run-agent"),
 			import("./server/agent/skills"),
@@ -86,7 +109,9 @@ const loadRuntime = async () => {
 		recordAgentSkillUse,
 		renameConversation,
 		undoLastConversationExchange,
+		updateAgentSettings,
 	} = services);
+	({ getAiSettingsByOrganizationId, saveAiSettings } = aiServices);
 	resolvePendingAction = pending.resolvePendingAction;
 	runAgent = runner.runAgent;
 	LEARN_SKILL_CONTEXT = skills.LEARN_SKILL_CONTEXT;
@@ -98,8 +123,14 @@ const loadRuntime = async () => {
 const parseCommand = (value: string) => {
 	const normalized = value.trim();
 	const [token = "", ...rest] = normalized.split(/\s+/);
+	const lowered = token.toLowerCase();
+	const bareCommands = new Set(["clear", "help", "model", "new", "provider"]);
 	return {
-		command: token.startsWith("/") ? token.toLowerCase() : undefined,
+		command: token.startsWith("/")
+			? lowered
+			: bareCommands.has(lowered)
+				? `/${lowered}`
+				: undefined,
 		args: rest.join(" ").trim(),
 		text: normalized,
 	};
@@ -205,7 +236,7 @@ const main = async () => {
 
 		await redrawHeader();
 		if (args.showHistory) {
-			await showRecentHistory(agent.agentId, sessionKey, colors);
+			await showRecentHistory(agent.agentId, sessionKey, agent.name, colors);
 		}
 
 		let retryText: string | null | undefined;
@@ -249,6 +280,14 @@ const main = async () => {
 				await redrawHeader();
 				continue;
 			}
+			if (command === "/model") {
+				await configureModel(composer, agent, commandArgs, colors);
+				continue;
+			}
+			if (command === "/provider") {
+				await configureProvider(composer, agent, commandArgs, colors);
+				continue;
+			}
 			if (command === "/new" || command === "/reset") {
 				const detached = await detachConversation(
 					agent.agentId,
@@ -270,7 +309,13 @@ const main = async () => {
 				continue;
 			}
 			if (command === "/resume") {
-				await resumeSession(agent.agentId, sessionKey, commandArgs, colors);
+				await resumeSession(
+					agent.agentId,
+					sessionKey,
+					commandArgs,
+					agent.name,
+					colors,
+				);
 				continue;
 			}
 			if (command === "/status") {
@@ -315,6 +360,15 @@ const main = async () => {
 				await showSkills(agent.agentId, colors);
 				continue;
 			}
+			if (!agent.ai?.isEnabled) {
+				process.stdout.write(
+					`\n${warningText(
+						"No AI provider is active. Use /provider add to configure one, or /provider to select an existing provider.",
+						colors,
+					)}\n`,
+				);
+				continue;
+			}
 
 			let context: string | undefined;
 			if (command === "/learn") {
@@ -342,7 +396,15 @@ const main = async () => {
 				}
 			}
 
-			process.stdout.write(`\n${renderMessage("user", text, colors)}\n`);
+			process.stdout.write(
+				`\n${renderMessage(
+					"user",
+					text,
+					colors,
+					process.stdout.columns ?? 80,
+					agent.name,
+				)}\n`,
+			);
 			const conversation = await findOrCreateConversation({
 				agentId: agent.agentId,
 				source: SOURCE,
@@ -350,8 +412,11 @@ const main = async () => {
 				title: text.slice(0, 80),
 			});
 			activeAbort = new AbortController();
-			const stream = new HarnessStreamRenderer(process.stdout, colors, () =>
-				spinner.finish(),
+			const stream = new HarnessStreamRenderer(
+				process.stdout,
+				colors,
+				() => spinner.finish(),
+				agent.name,
 			);
 			activeStream = stream;
 			spinner.start("pondering...");
@@ -421,7 +486,13 @@ const main = async () => {
 				} else {
 					spinner.finish();
 					process.stdout.write(
-						`\n${renderMessage("assistant", result.text, colors)}\n`,
+						`\n${renderMessage(
+							"assistant",
+							result.text,
+							colors,
+							process.stdout.columns ?? 80,
+							agent.name,
+						)}\n`,
 					);
 				}
 			} catch (error) {
@@ -511,9 +582,431 @@ const validateAgent = (agent: HarnessAgent) => {
 			`The agent "${agent.name}" is disabled. Enable it in Settings -> AI Agent.`,
 		);
 	}
+};
+
+const currentModel = (agent: HarnessAgent) =>
+	agent.model || agent.ai?.model || "Not configured";
+
+const writeOptions = (
+	title: string,
+	items: Array<{ title: string; detail?: string; active?: boolean }>,
+	colors: boolean,
+) => {
+	process.stdout.write(`\n${dimText(title, colors)}\n`);
+	for (const [index, item] of items.entries()) {
+		const marker = item.active
+			? successText("●", colors)
+			: dimText("○", colors);
+		process.stdout.write(
+			`  ${marker} ${String(index + 1).padStart(2)}. ${item.title}${
+				item.detail ? dimText(` · ${item.detail}`, colors) : ""
+			}\n`,
+		);
+	}
+};
+
+const resolveProviderChoice = (
+	providers: HarnessProvider[],
+	wanted: string,
+): HarnessProvider | undefined => {
+	const normalized = wanted.trim().toLowerCase();
+	const number = Number.parseInt(normalized, 10);
+	if (String(number) === normalized && number >= 1) {
+		return providers[number - 1];
+	}
+	return (
+		providers.find(
+			(provider) =>
+				provider.aiId.toLowerCase() === normalized ||
+				provider.name.toLowerCase() === normalized,
+		) ??
+		providers.find(
+			(provider) =>
+				provider.aiId.toLowerCase().startsWith(normalized) ||
+				provider.name.toLowerCase().startsWith(normalized),
+		)
+	);
+};
+
+const activateProvider = async (
+	agent: HarnessAgent,
+	provider: HarnessProvider,
+	colors: boolean,
+) => {
+	await updateAgentSettings(agent.agentId, {
+		aiId: provider.aiId,
+		model: null,
+	});
+	agent.aiId = provider.aiId;
+	agent.ai = provider;
+	agent.model = null;
+	process.stdout.write(
+		`\n${successText(
+			`Provider switched to ${provider.name} · ${provider.model}`,
+			colors,
+		)}\n`,
+	);
+};
+
+const chooseModel = async (
+	composer: HarnessComposer,
+	models: string[],
+	query: string,
+	activeModel: string,
+	colors: boolean,
+): Promise<string | null> => {
+	let wanted = query.trim();
+	if (!wanted && models.length > 24) {
+		process.stdout.write(
+			`\n${dimText(
+				`${models.length} models available. Search by model or vendor name.`,
+				colors,
+			)}\n`,
+		);
+		const search = await composer.ask({
+			label: "Model search",
+			placeholder: activeModel,
+			allowMultiline: false,
+			recordHistory: false,
+		});
+		if (search === null) return null;
+		wanted = search.trim();
+	}
+
+	const exact = wanted
+		? models.find((model) => model.toLowerCase() === wanted.toLowerCase())
+		: undefined;
+	if (exact) return exact;
+
+	const matches = wanted
+		? models.filter((model) =>
+				model.toLowerCase().includes(wanted.toLowerCase()),
+			)
+		: models;
+	if (matches.length === 0) {
+		process.stdout.write(
+			`\n${warningText(`No model matched "${wanted}".`, colors)}\n`,
+		);
+		return null;
+	}
+	if (matches.length === 1 && matches[0]) return matches[0];
+
+	const shown = matches.slice(0, 30);
+	writeOptions(
+		`Models${matches.length > shown.length ? ` · first ${shown.length} of ${matches.length}` : ""}`,
+		shown.map((model) => ({
+			title: model,
+			active: model === activeModel,
+		})),
+		colors,
+	);
+	const answer = await composer.ask({
+		label: "Model number or name",
+		placeholder: activeModel,
+		allowMultiline: false,
+		recordHistory: false,
+	});
+	if (answer === null || !answer.trim()) return null;
+	const normalized = answer.trim();
+	const number = Number.parseInt(normalized, 10);
+	if (String(number) === normalized && number >= 1) {
+		return shown[number - 1] ?? null;
+	}
+	const selected = models.find(
+		(model) => model.toLowerCase() === normalized.toLowerCase(),
+	);
+	if (!selected) {
+		process.stdout.write(
+			`\n${warningText(`No model matched "${normalized}".`, colors)}\n`,
+		);
+		return null;
+	}
+	return selected;
+};
+
+const configureModel = async (
+	composer: HarnessComposer,
+	agent: HarnessAgent,
+	query: string,
+	colors: boolean,
+) => {
 	if (!agent.ai?.isEnabled) {
-		throw new Error(
-			"No enabled AI provider is configured for this agent. Pick one in Settings -> AI Agent.",
+		process.stdout.write(
+			`\n${warningText("Configure an enabled provider with /provider add first.", colors)}\n`,
+		);
+		return;
+	}
+	if (/^(?:default|reset)$/i.test(query.trim())) {
+		await updateAgentSettings(agent.agentId, { model: null });
+		agent.model = null;
+		process.stdout.write(
+			`\n${successText(`Using provider default: ${agent.ai.model}`, colors)}\n`,
+		);
+		return;
+	}
+
+	try {
+		process.stdout.write(
+			`\n${dimText(`Loading models from ${agent.ai.name}…`, colors)}\n`,
+		);
+		const catalog = await fetchAiModels({
+			apiUrl: agent.ai.apiUrl,
+			apiKey: agent.ai.apiKey,
+		});
+		const models = [...new Set(catalog.map((model) => model.id))];
+		if (models.length === 0) {
+			process.stdout.write(
+				`${warningText("This provider returned no models.", colors)}\n`,
+			);
+			return;
+		}
+		const selected = await chooseModel(
+			composer,
+			models,
+			query,
+			currentModel(agent),
+			colors,
+		);
+		if (!selected) return;
+		await updateAgentSettings(agent.agentId, { model: selected });
+		agent.model = selected;
+		process.stdout.write(
+			`\n${successText(`Model switched to ${selected}`, colors)}\n`,
+		);
+	} catch (error) {
+		process.stdout.write(
+			`\n${errorText(
+				`Could not load models: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				colors,
+			)}\n`,
+		);
+	}
+};
+
+const addProvider = async (
+	composer: HarnessComposer,
+	agent: HarnessAgent,
+	colors: boolean,
+) => {
+	writeOptions(
+		"Provider setup",
+		[
+			...AI_PROVIDER_PRESETS.map((preset) => ({
+				title: preset.name,
+				detail: preset.hint,
+			})),
+			{ title: "Custom OpenAI-compatible endpoint" },
+		],
+		colors,
+	);
+	const typeAnswer = await composer.ask({
+		label: "Provider number",
+		placeholder: "1",
+		allowMultiline: false,
+		recordHistory: false,
+	});
+	if (typeAnswer === null) return;
+	const providerNumber = Number.parseInt(typeAnswer.trim(), 10);
+	const isCustom = providerNumber === AI_PROVIDER_PRESETS.length + 1;
+	const preset = AI_PROVIDER_PRESETS[providerNumber - 1];
+	if (!preset && !isCustom) {
+		process.stdout.write(
+			`\n${warningText("Choose a valid provider number.", colors)}\n`,
+		);
+		return;
+	}
+
+	const nameAnswer = await composer.ask({
+		label: "Connection name",
+		placeholder: preset?.name || "My provider",
+		initialValue: preset?.name || "",
+		allowMultiline: false,
+		recordHistory: false,
+	});
+	if (nameAnswer === null) return;
+	const name = nameAnswer.trim() || preset?.name || "Custom provider";
+
+	let apiUrl = preset?.apiUrl || "";
+	if (!apiUrl) {
+		const urlAnswer = await composer.ask({
+			label: "API URL",
+			placeholder: "https://provider.example.com/v1",
+			allowMultiline: false,
+			recordHistory: false,
+		});
+		if (urlAnswer === null) return;
+		apiUrl = urlAnswer.trim().replace(/\/+$/, "");
+		try {
+			const url = new URL(apiUrl);
+			if (!/^https?:$/.test(url.protocol))
+				throw new Error("unsupported protocol");
+		} catch {
+			process.stdout.write(
+				`\n${warningText("Enter a valid HTTP or HTTPS API URL.", colors)}\n`,
+			);
+			return;
+		}
+	}
+
+	const optionalKey = isKeyOptional(apiUrl);
+	const keyAnswer = await composer.ask({
+		label: "API key",
+		placeholder: optionalKey ? "Optional" : "Required",
+		maskInput: true,
+		allowMultiline: false,
+		recordHistory: false,
+	});
+	if (keyAnswer === null) return;
+	const apiKey = keyAnswer.trim();
+	if (!apiKey && !optionalKey) {
+		process.stdout.write(
+			`\n${warningText("This provider requires an API key.", colors)}\n`,
+		);
+		return;
+	}
+
+	let model: string | null = null;
+	try {
+		process.stdout.write(
+			`\n${dimText(`Checking ${name} and loading models…`, colors)}\n`,
+		);
+		const catalog = await fetchAiModels({ apiUrl, apiKey });
+		const models = [...new Set(catalog.map((entry) => entry.id))];
+		if (models.length > 0) {
+			model = await chooseModel(composer, models, "", models[0] ?? "", colors);
+		}
+	} catch (error) {
+		process.stdout.write(
+			`${warningText(
+				`Model discovery was unavailable: ${
+					error instanceof Error ? error.message : String(error)
+				}. You can enter the model manually.`,
+				colors,
+			)}\n`,
+		);
+	}
+	if (!model) {
+		const modelAnswer = await composer.ask({
+			label: "Model ID",
+			placeholder: "provider/model-name",
+			allowMultiline: false,
+			recordHistory: false,
+		});
+		if (modelAnswer === null) return;
+		model = modelAnswer.trim();
+	}
+	if (!model) {
+		process.stdout.write(
+			`\n${warningText("A model ID is required.", colors)}\n`,
+		);
+		return;
+	}
+
+	try {
+		await saveAiSettings(agent.organizationId, {
+			name,
+			apiUrl,
+			apiKey,
+			model,
+			isEnabled: true,
+		});
+		const providers = (await getAiSettingsByOrganizationId(
+			agent.organizationId,
+		)) as HarnessProvider[];
+		const created = providers.find(
+			(provider) => provider.name === name && provider.apiUrl === apiUrl,
+		);
+		if (!created)
+			throw new Error("The provider was saved but could not be selected");
+		await activateProvider(agent, created, colors);
+	} catch (error) {
+		process.stdout.write(
+			`\n${errorText(
+				`Could not save provider: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				colors,
+			)}\n`,
+		);
+	}
+};
+
+const configureProvider = async (
+	composer: HarnessComposer,
+	agent: HarnessAgent,
+	args: string,
+	colors: boolean,
+) => {
+	const normalized = args.trim();
+	if (/^(?:add|config|configure|setup)$/i.test(normalized)) {
+		await addProvider(composer, agent, colors);
+		return;
+	}
+	try {
+		const providers = (
+			await getAiSettingsByOrganizationId(agent.organizationId)
+		).filter((provider) => provider.isEnabled) as HarnessProvider[];
+		if (providers.length === 0) {
+			process.stdout.write(
+				`\n${warningText(
+					"No enabled providers are configured. Starting provider setup.",
+					colors,
+				)}\n`,
+			);
+			await addProvider(composer, agent, colors);
+			return;
+		}
+
+		writeOptions(
+			"Configured providers",
+			providers.map((provider) => ({
+				title: provider.name,
+				detail: `${provider.model} · ${provider.apiUrl}`,
+				active: provider.aiId === agent.aiId,
+			})),
+			colors,
+		);
+		if (/^list$/i.test(normalized)) return;
+		if (/^current$/i.test(normalized)) {
+			process.stdout.write(
+				`${dimText(
+					`Active: ${agent.ai?.name || "None"} · ${currentModel(agent)}`,
+					colors,
+				)}\n`,
+			);
+			return;
+		}
+
+		let wanted = normalized.replace(/^use\s+/i, "");
+		if (!wanted) {
+			const answer = await composer.ask({
+				label: "Provider number or name",
+				placeholder: agent.ai?.name || "1",
+				allowMultiline: false,
+				recordHistory: false,
+			});
+			if (answer === null) return;
+			wanted = answer.trim();
+		}
+		if (!wanted) return;
+		const selected = resolveProviderChoice(providers, wanted);
+		if (!selected) {
+			process.stdout.write(
+				`\n${warningText(`No provider matched "${wanted}".`, colors)}\n`,
+			);
+			return;
+		}
+		await activateProvider(agent, selected, colors);
+	} catch (error) {
+		process.stdout.write(
+			`\n${errorText(
+				`Could not configure provider: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				colors,
+			)}\n`,
 		);
 	}
 };
@@ -521,6 +1014,7 @@ const validateAgent = (agent: HarnessAgent) => {
 const showRecentHistory = async (
 	agentId: string,
 	sessionKey: string,
+	agentName: string,
 	colors: boolean,
 ) => {
 	const conversation = await findConversationByExternalChat(
@@ -542,7 +1036,13 @@ const showRecentHistory = async (
 	);
 	for (const message of messages) {
 		process.stdout.write(
-			`${renderMessage(message.role, message.content, colors)}\n\n`,
+			`${renderMessage(
+				message.role,
+				message.content,
+				colors,
+				process.stdout.columns ?? 80,
+				agentName,
+			)}\n\n`,
 		);
 	}
 };
@@ -590,6 +1090,7 @@ const resumeSession = async (
 	agentId: string,
 	sessionKey: string,
 	wanted: string,
+	agentName: string,
 	colors: boolean,
 ) => {
 	if (!wanted) {
@@ -624,7 +1125,7 @@ const resumeSession = async (
 	process.stdout.write(
 		`\n${successText(`Resumed: ${selected.title || selected.conversationId}`, colors)}\n`,
 	);
-	await showRecentHistory(agentId, sessionKey, colors);
+	await showRecentHistory(agentId, sessionKey, agentName, colors);
 };
 
 const showStatus = async (

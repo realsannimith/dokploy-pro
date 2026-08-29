@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { renderComposerView } from "@/server/agent/terminal-composer";
 import {
+	HarnessSpinner,
 	HarnessStreamRenderer,
 	parseHarnessArgs,
 	renderBanner,
 	renderMarkdown,
+	renderMessage,
 	renderSessionPanel,
 	renderStatusBar,
 	renderToolProgress,
@@ -153,6 +155,51 @@ describe("Dokploy Pro terminal harness UI", () => {
 		for (const line of multiline.text.split("\n")) {
 			expect([...line].length).toBe(33);
 		}
+
+		const masked = renderComposerView(
+			{
+				label: "API key",
+				placeholder: "Required",
+				maskInput: true,
+			},
+			"sk-secret-value",
+			15,
+			48,
+			false,
+		);
+		expect(masked.text).not.toContain("sk-secret-value");
+		expect(masked.text).toContain("•••••••••••••••");
+	});
+
+	it("matches Hermes transcript framing without decorative completion text", () => {
+		const user = stripAnsi(renderMessage("user", "Deploy staging", false, 60));
+		const assistant = stripAnsi(
+			renderMessage("assistant", "Deployment is **healthy**.", false, 60),
+		);
+		expect(user).toContain("────────────────");
+		expect(user).toContain("● Deploy staging");
+		expect(user).not.toContain("You");
+		expect(assistant).toContain("╭─⚕ Dokploy Agent");
+		expect(assistant).toContain("Deployment is healthy.");
+		expect(assistant).toContain("╰────────────────");
+		expect(assistant).not.toContain("◆ Agent");
+
+		const chunks: string[] = [];
+		const spinner = new HarnessSpinner(
+			{
+				write: (chunk) => {
+					chunks.push(String(chunk));
+					return true;
+				},
+			},
+			false,
+		);
+		spinner.start("pondering...");
+		spinner.finish();
+		const output = chunks.join("");
+		expect(output).not.toContain("got it");
+		expect(output).not.toContain("ˊᗜˋ");
+		expect(output).not.toContain("｡•́");
 	});
 
 	it("streams assistant deltas with a live cursor and inline styling", () => {
@@ -177,7 +224,8 @@ describe("Dokploy Pro terminal harness UI", () => {
 		const output = stripAnsi(chunks.join(""));
 		const settledOutput = output.replace(/▍ ?/g, "");
 		expect(started).toBe(1);
-		expect(output).toContain("◆ Agent");
+		expect(output).toContain("╭─⚕ Dokploy Agent");
+		expect(output).toContain("╰────────────────");
 		expect(settledOutput).toContain("Hello operator. Use status now.");
 		expect(output).toContain("▍");
 		expect(output).not.toContain("**");

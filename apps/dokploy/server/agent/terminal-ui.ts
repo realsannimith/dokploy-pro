@@ -295,22 +295,37 @@ export const renderMessage = (
 	role: "user" | "assistant" | "system",
 	text: string,
 	colors = true,
+	columns = 80,
+	assistantName = "Dokploy Agent",
 ) => {
-	const identity =
-		role === "user"
-			? { glyph: "❯", label: "You", color: HARNESS_THEME.primary }
-			: role === "assistant"
-				? { glyph: "◆", label: "Agent", color: HARNESS_THEME.accent }
-				: { glyph: "◈", label: "System", color: HARNESS_THEME.muted };
-	const header = emphasize(
-		`${identity.glyph} ${identity.label}`,
-		identity.color,
-		colors,
-	);
-	const body =
-		role === "assistant"
-			? renderMarkdown(text, colors)
-			: paint(text, HARNESS_THEME.text, colors);
+	if (role === "user") {
+		const lines = text.split("\n");
+		const first = lines.shift() ?? "";
+		const divider = "─".repeat(Math.max(12, Math.min(40, columns - 2)));
+		return [
+			paint(divider, HARNESS_THEME.border, colors),
+			`${emphasize("●", HARNESS_THEME.primary, colors)} ${emphasize(
+				first,
+				HARNESS_THEME.text,
+				colors,
+			)}`,
+			...lines.map((line) => emphasize(line, HARNESS_THEME.text, colors)),
+		].join("\n");
+	}
+
+	if (role === "assistant") {
+		const width = Math.max(20, columns - 2);
+		const label = clip(`⚕ ${assistantName}`, Math.max(1, width - 4));
+		const fill = Math.max(1, width - label.length - 3);
+		return [
+			paint(`╭─${label}${"─".repeat(fill)}╮`, HARNESS_THEME.accent, colors),
+			renderMarkdown(text, colors),
+			paint(`╰${"─".repeat(width - 2)}╯`, HARNESS_THEME.accent, colors),
+		].join("\n");
+	}
+
+	const header = emphasize("◈ System", HARNESS_THEME.muted, colors);
+	const body = paint(text, HARNESS_THEME.text, colors);
 	return `${header}\n${body
 		.split("\n")
 		.map((line) => `  ${line}`)
@@ -370,6 +385,10 @@ export const renderRule = (columns = 80, colors = true) =>
 
 export const COMMAND_HELP = `Commands
   /new                Start a fresh session
+  /model [name]       Pick or switch the active model
+  /provider           Pick a configured AI provider
+  /provider add       Configure and activate a new provider
+  /provider list      List configured providers
   /sessions [search]  List terminal sessions
   /resume <id|title>  Resume an older session
   /status              Show active agent and session
@@ -382,6 +401,8 @@ export const COMMAND_HELP = `Commands
   /help                Show these commands
   /exit                Close the harness
 
+  clear, new, model, provider, and help also work without the leading slash.
+
 Keys
   Enter                Send the message
   Shift/Alt+Enter      Insert a new line
@@ -389,12 +410,7 @@ Keys
   Ctrl+C               Interrupt a running agent, or exit when idle
   Ctrl+D               Exit`;
 
-const SPINNER_FRAMES = [
-	{ glyph: "◜", face: "(｡•́︿•̀｡)" },
-	{ glyph: "◠", face: "(⊙_⊙)" },
-	{ glyph: "◝", face: "(•̀ᴗ•́)و" },
-	{ glyph: "◞", face: "(｡•̀ᴗ-)✧" },
-];
+const SPINNER_FRAMES = ["◜", "◠", "◝", "◞"];
 
 export class HarnessSpinner {
 	private frame = 0;
@@ -429,18 +445,8 @@ export class HarnessSpinner {
 		if (clear) this.output.write("\r\u001B[2K");
 	}
 
-	finish(label = "got it!") {
-		const elapsed = this.startedAt
-			? `${Math.max(0.1, (Date.now() - this.startedAt) / 1000).toFixed(1)}s`
-			: "0.1s";
+	finish() {
 		this.stop();
-		this.output.write(
-			`  ${paint("✧", HARNESS_THEME.accent, this.colors)} ${paint(
-				`(ˊᗜˋ*) ${label} (${elapsed})`,
-				HARNESS_THEME.muted,
-				this.colors,
-			)}\n`,
-		);
 	}
 
 	private draw() {
@@ -450,14 +456,10 @@ export class HarnessSpinner {
 		const frame = SPINNER_FRAMES[this.frame] ?? SPINNER_FRAMES[0];
 		this.output.write(
 			`\r\u001B[2K  ${paint(
-				frame?.glyph ?? "◜",
+				frame ?? "◜",
 				HARNESS_THEME.accent,
 				this.colors,
-			)} ${paint(
-				`${frame?.face ?? "(｡•́︿•̀｡)"} ${this.label}${elapsed}`,
-				HARNESS_THEME.muted,
-				this.colors,
-			)}`,
+			)} ${paint(`${this.label}${elapsed}`, HARNESS_THEME.muted, this.colors)}`,
 		);
 	}
 }
@@ -476,9 +478,10 @@ export class HarnessStreamRenderer {
 	private pendingAsterisk = "";
 
 	constructor(
-		private readonly output: Pick<Writable, "write">,
+		private readonly output: Pick<Writable, "write"> & { columns?: number },
 		private readonly colors = true,
 		private readonly onFirstText?: () => void,
+		private readonly assistantName = "Dokploy Agent",
 	) {}
 
 	get hasText() {
@@ -490,8 +493,7 @@ export class HarnessStreamRenderer {
 		this.wroteText = true;
 		if (!this.blockOpen) {
 			this.onFirstText?.();
-			const header = emphasize("◆ Agent", HARNESS_THEME.accent, this.colors);
-			this.output.write(`\n${header}\n  `);
+			this.output.write(`\n${this.renderTopBorder()}\n`);
 			this.blockOpen = true;
 		}
 		this.clearCursor();
@@ -506,7 +508,7 @@ export class HarnessStreamRenderer {
 			this.output.write(this.stylePrefix() + this.pendingAsterisk);
 			this.pendingAsterisk = "";
 		}
-		this.output.write(`${RESET}\n`);
+		this.output.write(`${RESET}\n${this.renderBottomBorder()}\n`);
 		this.blockOpen = false;
 		this.bold = false;
 		this.code = false;
@@ -539,9 +541,29 @@ export class HarnessStreamRenderer {
 				rendered += this.stylePrefix();
 				continue;
 			}
-			rendered += character === "\n" ? "\n  " : character;
+			rendered += character;
 		}
 		return rendered;
+	}
+
+	private renderTopBorder() {
+		const width = Math.max(20, (this.output.columns ?? 80) - 2);
+		const label = clip(`⚕ ${this.assistantName}`, Math.max(1, width - 4));
+		const fill = Math.max(1, width - label.length - 3);
+		return paint(
+			`╭─${label}${"─".repeat(fill)}╮`,
+			HARNESS_THEME.accent,
+			this.colors,
+		);
+	}
+
+	private renderBottomBorder() {
+		const width = Math.max(20, (this.output.columns ?? 80) - 2);
+		return paint(
+			`╰${"─".repeat(width - 2)}╯`,
+			HARNESS_THEME.accent,
+			this.colors,
+		);
 	}
 
 	private stylePrefix() {

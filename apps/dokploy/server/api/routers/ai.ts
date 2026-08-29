@@ -25,16 +25,8 @@ import {
 	checkServiceAccess,
 } from "@dokploy/server/services/permission";
 import { findProjectById } from "@dokploy/server/services/project";
-import {
-	findPresetByApiUrl,
-	isKeyOptional,
-} from "@dokploy/server/utils/ai/providers";
-import {
-	getProviderHeaders,
-	getProviderName,
-	type Model,
-	selectAIProvider,
-} from "@dokploy/server/utils/ai/select-ai-provider";
+import { fetchAiModels } from "@dokploy/server/utils/ai/fetch-ai-models";
+import { selectAIProvider } from "@dokploy/server/utils/ai/select-ai-provider";
 import { TRPCError } from "@trpc/server";
 import { generateText } from "ai";
 import { z } from "zod";
@@ -57,75 +49,7 @@ export const aiRouter = createTRPCRouter({
 		.input(z.object({ apiUrl: z.string().min(1), apiKey: z.string() }))
 		.query(async ({ input }) => {
 			try {
-				const providerName = getProviderName(input.apiUrl);
-				const headers = getProviderHeaders(input.apiUrl, input.apiKey);
-				let response = null;
-				switch (providerName) {
-					case "ollama":
-						response = await fetch(`${input.apiUrl}/api/tags`, { headers });
-						break;
-					case "gemini":
-						response = await fetch(
-							`${input.apiUrl}/models?key=${encodeURIComponent(input.apiKey)}`,
-							{ headers: {} },
-						);
-						break;
-					default: {
-						const preset = findPresetByApiUrl(input.apiUrl);
-						if (preset?.staticModels) {
-							return preset.staticModels.map((id) => ({
-								id,
-								object: "model",
-								created: Date.now(),
-								owned_by: preset.id,
-							})) as Model[];
-						}
-						if (!input.apiKey && !isKeyOptional(input.apiUrl))
-							throw new TRPCError({
-								code: "BAD_REQUEST",
-								message: "API key must contain at least 1 character(s)",
-							});
-						response = await fetch(`${input.apiUrl}/models`, { headers });
-					}
-				}
-
-				if (!response.ok) {
-					const errorText = await response.text();
-					throw new Error(`Failed to fetch models: ${errorText}`);
-				}
-
-				const res = await response.json();
-
-				if (Array.isArray(res)) {
-					return res.map((model) => ({
-						id: model.id || model.name,
-						object: "model",
-						created: Date.now(),
-						owned_by: "provider",
-					}));
-				}
-
-				if (res.models) {
-					return res.models.map((model: any) => ({
-						id: model.id || model.name,
-						object: "model",
-						created: Date.now(),
-						owned_by: "provider",
-					})) as Model[];
-				}
-
-				if (res.data) {
-					return res.data as Model[];
-				}
-
-				const possibleModels =
-					(Object.values(res).find(Array.isArray) as any[]) || [];
-				return possibleModels.map((model) => ({
-					id: model.id || model.name,
-					object: "model",
-					created: Date.now(),
-					owned_by: "provider",
-				})) as Model[];
+				return await fetchAiModels(input);
 			} catch (error) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",

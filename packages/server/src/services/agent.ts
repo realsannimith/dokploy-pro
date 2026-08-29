@@ -158,7 +158,12 @@ export const saveAgent = async (
 
 export const updateAgentSettings = async (
 	agentId: string,
-	data: { toolConfig?: AgentToolConfig; mcpConfig?: AgentMcpConfig },
+	data: {
+		aiId?: string | null;
+		model?: string | null;
+		toolConfig?: AgentToolConfig;
+		mcpConfig?: AgentMcpConfig;
+	},
 ) => {
 	const updated = await db
 		.update(agent)
