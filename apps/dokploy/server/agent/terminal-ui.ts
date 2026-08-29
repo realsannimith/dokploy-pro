@@ -158,8 +158,8 @@ export const renderSessionPanel = (
 ) => {
 	const width = Math.max(20, Math.min(76, columns - 2));
 	const inner = width - 2;
-	const row = (label: string, value: string) => {
-		const plain = `  ${label.padEnd(13)}${value}`;
+	const row = (glyph: string, value: string) => {
+		const plain = `  ${glyph}  ${value}`;
 		const fitted = clip(plain, inner).padEnd(inner);
 		return `${paint("│", HARNESS_THEME.border, colors)}${paint(
 			fitted,
@@ -167,20 +167,61 @@ export const renderSessionPanel = (
 			colors,
 		)}${paint("│", HARNESS_THEME.border, colors)}`;
 	};
-	const title = " SESSION ";
+	const title = clip(" DOKPLOY PRO · AGENT SESSION ", Math.max(1, width - 3));
 	const top = `╭─${title}${"─".repeat(Math.max(0, width - title.length - 3))}╮`;
 	return [
 		paint(top, HARNESS_THEME.border, colors),
-		row("Agent", data.agent),
-		row("Organization", data.organization),
-		row("Model", data.model),
-		row("Session", data.session),
+		row("◆", `${data.agent} · ${data.organization}`),
+		row("⚕", data.model),
+		row("◫", data.session),
 		row(
-			"Capabilities",
+			"┊",
 			`${data.tools} tools · ${data.skills} skills · ${data.memories} memories`,
 		),
 		paint(`╰${"─".repeat(inner)}╯`, HARNESS_THEME.border, colors),
 	].join("\n");
+};
+
+export interface StatusBarData {
+	model: string;
+	session: string;
+	messages: number;
+	tools: number;
+	skills: number;
+	elapsedMs: number;
+}
+
+const formatElapsed = (durationMs: number) => {
+	const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+	if (totalSeconds < 60) return `${totalSeconds}s`;
+	const minutes = Math.floor(totalSeconds / 60);
+	if (minutes < 60) return `${minutes}m`;
+	return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+};
+
+export const renderStatusBar = (
+	data: StatusBarData,
+	columns = 80,
+	colors = true,
+) => {
+	const width = Math.max(20, columns - 2);
+	const model = clip(data.model, columns >= 76 ? 26 : 18);
+	const session = clip(data.session, Math.max(10, Math.floor(columns / 3)));
+	const elapsed = formatElapsed(data.elapsedMs);
+	const sections =
+		columns >= 76
+			? [
+					`⚕ ${model}`,
+					`${data.messages} msgs`,
+					`${data.tools} tools`,
+					`${data.skills} skills`,
+					elapsed,
+					session,
+				]
+			: columns >= 52
+				? [`⚕ ${model}`, `${data.messages} msgs`, elapsed, session]
+				: [`⚕ ${model}`, elapsed];
+	return paint(clip(sections.join(" │ "), width), HARNESS_THEME.muted, colors);
 };
 
 const inlineMarkdown = (line: string, colors: boolean) => {
@@ -278,8 +319,24 @@ export const renderToolProgress = (
 ) => {
 	const color = success ? HARNESS_THEME.ok : HARNESS_THEME.warn;
 	const duration = `${Math.max(0.1, durationMs / 1000).toFixed(1)}s`;
-	return `${paint(success ? "●" : "▲", color, colors)} ${paint(
-		`Step ${step} · ${friendlyToolName(toolName)} · ${duration}`,
+	const normalized = toolName.toLowerCase();
+	const glyph = !success
+		? "×"
+		: /log/.test(normalized)
+			? "≋"
+			: /deploy|build|release/.test(normalized)
+				? "↗"
+				: /delete|remove|destroy/.test(normalized)
+					? "−"
+					: /search|list|get|find|read|inspect/.test(normalized)
+						? "⌕"
+						: "●";
+	return `  ${paint("┊", HARNESS_THEME.border, colors)} ${paint(
+		glyph,
+		color,
+		colors,
+	)} ${paint(
+		`${friendlyToolName(toolName)} (${duration}) · #${step}`,
 		HARNESS_THEME.muted,
 		colors,
 	)}`;
@@ -319,7 +376,12 @@ Keys
   Ctrl+C               Interrupt a running agent, or exit when idle
   Ctrl+D               Exit`;
 
-const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_FRAMES = [
+	{ glyph: "◜", face: "(｡•́︿•̀｡)" },
+	{ glyph: "◠", face: "(⊙_⊙)" },
+	{ glyph: "◝", face: "(•̀ᴗ•́)و" },
+	{ glyph: "◞", face: "(｡•̀ᴗ-)✧" },
+];
 
 export class HarnessSpinner {
 	private frame = 0;
@@ -354,17 +416,139 @@ export class HarnessSpinner {
 		if (clear) this.output.write("\r\u001B[2K");
 	}
 
+	finish(label = "got it!") {
+		const elapsed = this.startedAt
+			? `${Math.max(0.1, (Date.now() - this.startedAt) / 1000).toFixed(1)}s`
+			: "0.1s";
+		this.stop();
+		this.output.write(
+			`  ${paint("✧", HARNESS_THEME.accent, this.colors)} ${paint(
+				`(ˊᗜˋ*) ${label} (${elapsed})`,
+				HARNESS_THEME.muted,
+				this.colors,
+			)}\n`,
+		);
+	}
+
 	private draw() {
 		const elapsed = this.startedAt
 			? ` · ${Math.max(0.1, (Date.now() - this.startedAt) / 1000).toFixed(1)}s`
 			: "";
+		const frame = SPINNER_FRAMES[this.frame] ?? SPINNER_FRAMES[0];
 		this.output.write(
-			`\r\u001B[2K${paint(
-				SPINNER_FRAMES[this.frame] ?? "⠋",
+			`\r\u001B[2K  ${paint(
+				frame?.glyph ?? "◜",
 				HARNESS_THEME.accent,
 				this.colors,
-			)} ${paint(`${this.label}${elapsed}`, HARNESS_THEME.muted, this.colors)}`,
+			)} ${paint(
+				`${frame?.face ?? "(｡•́︿•̀｡)"} ${this.label}${elapsed}`,
+				HARNESS_THEME.muted,
+				this.colors,
+			)}`,
 		);
+	}
+}
+
+/**
+ * Incremental assistant renderer for the terminal harness. It writes provider
+ * deltas immediately, keeps a Hermes-style live cursor, and handles the most
+ * common inline markdown markers without waiting for the full response.
+ */
+export class HarnessStreamRenderer {
+	private blockOpen = false;
+	private cursorVisible = false;
+	private wroteText = false;
+	private bold = false;
+	private code = false;
+	private pendingAsterisk = "";
+
+	constructor(
+		private readonly output: Pick<Writable, "write">,
+		private readonly colors = true,
+		private readonly onFirstText?: () => void,
+	) {}
+
+	get hasText() {
+		return this.wroteText;
+	}
+
+	push(delta: string) {
+		if (!delta) return;
+		this.wroteText = true;
+		if (!this.blockOpen) {
+			this.onFirstText?.();
+			const header = emphasize("◆ Agent", HARNESS_THEME.accent, this.colors);
+			this.output.write(`\n${header}\n  `);
+			this.blockOpen = true;
+		}
+		this.clearCursor();
+		this.output.write(this.formatDelta(delta));
+		this.drawCursor();
+	}
+
+	pause() {
+		if (!this.blockOpen) return;
+		this.clearCursor();
+		if (this.pendingAsterisk) {
+			this.output.write(this.stylePrefix() + this.pendingAsterisk);
+			this.pendingAsterisk = "";
+		}
+		this.output.write(`${RESET}\n`);
+		this.blockOpen = false;
+		this.bold = false;
+		this.code = false;
+	}
+
+	finish() {
+		this.pause();
+		return this.wroteText;
+	}
+
+	private formatDelta(delta: string) {
+		let input = this.pendingAsterisk + delta;
+		this.pendingAsterisk = "";
+		if (input.endsWith("*") && !input.endsWith("**")) {
+			this.pendingAsterisk = "*";
+			input = input.slice(0, -1);
+		}
+
+		let rendered = this.stylePrefix();
+		for (let index = 0; index < input.length; index += 1) {
+			if (input.startsWith("**", index)) {
+				this.bold = !this.bold;
+				rendered += this.stylePrefix();
+				index += 1;
+				continue;
+			}
+			const character = input[index] ?? "";
+			if (character === "`") {
+				this.code = !this.code;
+				rendered += this.stylePrefix();
+				continue;
+			}
+			rendered += character === "\n" ? "\n  " : character;
+		}
+		return rendered;
+	}
+
+	private stylePrefix() {
+		if (!this.colors) return "";
+		if (this.code) return `${RESET}${HARNESS_THEME.warn}`;
+		if (this.bold) return `${RESET}${BOLD}${HARNESS_THEME.text}`;
+		return `${RESET}${HARNESS_THEME.text}`;
+	}
+
+	private clearCursor() {
+		if (!this.cursorVisible) return;
+		this.output.write(" \u001B[1D");
+		this.cursorVisible = false;
+	}
+
+	private drawCursor() {
+		this.output.write(
+			`${RESET}${paint("▍", HARNESS_THEME.accent, this.colors)}\u001B[1D`,
+		);
+		this.cursorVisible = true;
 	}
 }
 

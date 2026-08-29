@@ -9,7 +9,13 @@ import {
 	findOrCreateConversation,
 } from "@dokploy/server/services/agent";
 import { selectAIProvider } from "@dokploy/server/utils/ai/select-ai-provider";
-import { generateText, type ModelMessage, stepCountIs } from "ai";
+import {
+	generateText,
+	type ModelMessage,
+	type StepResult,
+	stepCountIs,
+	streamText,
+} from "ai";
 import { createAgentCaller } from "./caller";
 import { formatSkillIndex } from "./skills";
 import { type AgentConfirmationHandler, buildAgentTools } from "./tools";
@@ -92,6 +98,13 @@ export interface RunAgentInput {
 	confirmation?: AgentConfirmationHandler;
 	/** Lets an interactive surface interrupt a model request with Ctrl+C. */
 	abortSignal?: AbortSignal;
+	/** Streams assistant text as the provider emits it. */
+	onTextDelta?: (delta: string) => Promise<void> | void;
+	/** Reports a tool as soon as execution begins. */
+	onToolStart?: (progress: {
+		step: number;
+		toolName: string;
+	}) => Promise<void> | void;
 	onProgress?: (progress: {
 		step: number;
 		toolName: string;
@@ -169,9 +182,10 @@ export const runAgent = async (
 		apiKey: agent.ai.apiKey,
 	});
 	const model = provider(agent.model || agent.ai.model);
+	let startedTools = 0;
 	let completedTools = 0;
 
-	const result = await generateText({
+	const generationOptions = {
 		model,
 		system: buildSystemPrompt(
 			agent.name,
@@ -185,7 +199,26 @@ export const runAgent = async (
 		tools,
 		abortSignal: input.abortSignal,
 		stopWhen: stepCountIs(MAX_STEPS),
-		experimental_onToolCallFinish: async (event) => {
+		experimental_onToolCallStart: async (event: {
+			toolCall: { toolName: string };
+		}) => {
+			if (!input.onToolStart) return;
+			startedTools += 1;
+			try {
+				await input.onToolStart({
+					step: startedTools,
+					toolName: event.toolCall.toolName,
+				});
+			} catch {
+				// Progress delivery is best-effort and must never stop the agent loop.
+			}
+		},
+		experimental_onToolCallFinish: async (event: {
+			success: boolean;
+			output?: unknown;
+			durationMs: number;
+			toolCall: { toolName: string };
+		}) => {
 			if (!input.onProgress) return;
 			completedTools += 1;
 			const outputFailed =
@@ -203,10 +236,34 @@ export const runAgent = async (
 				// Progress delivery is best-effort and must never stop the agent loop.
 			}
 		},
-	});
+	};
+
+	let generatedText: string;
+	let generatedSteps: Array<StepResult<typeof tools>>;
+	if (input.onTextDelta) {
+		const result = streamText({
+			...generationOptions,
+			onChunk: async ({ chunk }) => {
+				if (chunk.type !== "text-delta" || !chunk.text) return;
+				try {
+					await input.onTextDelta?.(chunk.text);
+				} catch {
+					// Streaming display is best-effort and must not stop the agent loop.
+				}
+			},
+		});
+		[generatedText, generatedSteps] = await Promise.all([
+			result.text,
+			result.steps,
+		]);
+	} else {
+		const result = await generateText(generationOptions);
+		generatedText = result.text;
+		generatedSteps = result.steps;
+	}
 
 	const toolCalls: AgentToolCall[] = [];
-	for (const step of result.steps) {
+	for (const step of generatedSteps) {
 		for (const toolCall of step.toolCalls) {
 			const toolResult = step.toolResults.find(
 				(candidate) => candidate.toolCallId === toolCall.toolCallId,
@@ -225,7 +282,7 @@ export const runAgent = async (
 	}
 
 	const text =
-		result.text.trim() ||
+		generatedText.trim() ||
 		(toolCalls.length > 0
 			? "Done. (The model returned no summary text.)"
 			: "I could not produce a response. Please try rephrasing.");

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+	HarnessStreamRenderer,
 	parseHarnessArgs,
 	renderBanner,
 	renderMarkdown,
 	renderSessionPanel,
+	renderStatusBar,
 	renderToolProgress,
 	stripAnsi,
 } from "@/server/agent/terminal-ui";
@@ -89,6 +91,55 @@ describe("Dokploy Pro terminal harness UI", () => {
 		expect(markdown).toBe("Result\n• api is healthy\n┊ verified");
 		expect(
 			stripAnsi(renderToolProgress(2, "readDeploymentLogs", true, 1250)),
-		).toBe("● Step 2 · read deployment logs · 1.3s");
+		).toBe("  ┊ ≋ read deployment logs (1.3s) · #2");
+	});
+
+	it("renders a responsive Hermes-style status line", () => {
+		const status = stripAnsi(
+			renderStatusBar(
+				{
+					model: "provider/operations-model",
+					session: "Deploy staging safely",
+					messages: 12,
+					tools: 30,
+					skills: 4,
+					elapsedMs: 125_000,
+				},
+				100,
+			),
+		);
+		expect(status).toContain("⚕ provider/operations-model");
+		expect(status).toContain("12 msgs");
+		expect(status).toContain("30 tools");
+		expect(status).toContain("4 skills");
+		expect(status).toContain("2m");
+	});
+
+	it("streams assistant deltas with a live cursor and inline styling", () => {
+		const chunks: string[] = [];
+		let started = 0;
+		const stream = new HarnessStreamRenderer(
+			{
+				write: (chunk) => {
+					chunks.push(String(chunk));
+					return true;
+				},
+			},
+			true,
+			() => {
+				started += 1;
+			},
+		);
+		stream.push("Hello **oper");
+		stream.push("ator**. Use `status` now.");
+		expect(stream.finish()).toBe(true);
+
+		const output = stripAnsi(chunks.join(""));
+		const settledOutput = output.replace(/▍ ?/g, "");
+		expect(started).toBe(1);
+		expect(output).toContain("◆ Agent");
+		expect(settledOutput).toContain("Hello operator. Use status now.");
+		expect(output).toContain("▍");
+		expect(output).not.toContain("**");
 	});
 });

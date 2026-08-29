@@ -8,8 +8,10 @@ import {
 	COMMAND_HELP,
 	dimText,
 	errorText,
+	friendlyToolName,
 	HARNESS_USAGE,
 	HarnessSpinner,
+	HarnessStreamRenderer,
 	parseHarnessArgs,
 	promptText,
 	renderApproval,
@@ -17,6 +19,7 @@ import {
 	renderMessage,
 	renderRule,
 	renderSessionPanel,
+	renderStatusBar,
 	renderToolProgress,
 	successText,
 	terminalColorsEnabled,
@@ -135,6 +138,7 @@ const main = async () => {
 	});
 	const spinner = new HarnessSpinner(process.stdout, colors);
 	let activeAbort: AbortController | undefined;
+	let activeStream: HarnessStreamRenderer | undefined;
 	let closed = false;
 	let goodbyeWritten = false;
 
@@ -144,6 +148,7 @@ const main = async () => {
 	rl.on("SIGINT", () => {
 		if (activeAbort) {
 			activeAbort.abort();
+			activeStream?.pause();
 			spinner.stop();
 			process.stdout.write(`${warningText("Interrupted.", colors)}\n`);
 			return;
@@ -162,6 +167,9 @@ const main = async () => {
 			process.env.DOKPLOY_HARNESS_SESSION ||
 			"local-terminal"
 		).slice(0, 160);
+		const sessionStartedAt = Date.now();
+		let availableTools = 0;
+		let availableSkills = 0;
 
 		const redrawHeader = async () => {
 			const [skills, memories, conversation] = await Promise.all([
@@ -169,9 +177,10 @@ const main = async () => {
 				findAgentMemories(agent.agentId),
 				findConversationByExternalChat(agent.agentId, SOURCE, sessionKey),
 			]);
-			const tools = AGENT_TOOL_META.filter(
+			availableTools = AGENT_TOOL_META.filter(
 				(meta) => resolveToolSetting(meta.name, agent.toolConfig).enabled,
 			).length;
+			availableSkills = skills.length;
 			process.stdout.write(
 				`${renderBanner(process.stdout.columns ?? 80, packageInfo.version, colors)}\n\n`,
 			);
@@ -182,7 +191,7 @@ const main = async () => {
 						organization: agent.organization.name,
 						model: agent.model || agent.ai?.model || "Not configured",
 						session: conversation?.title || "Fresh terminal session",
-						tools,
+						tools: availableTools,
 						skills: skills.length,
 						memories: memories.length,
 					},
@@ -202,6 +211,32 @@ const main = async () => {
 
 		let retryText: string | null | undefined;
 		while (!closed) {
+			const statusConversation = await findConversationByExternalChat(
+				agent.agentId,
+				SOURCE,
+				sessionKey,
+			);
+			const statusMessageCount = statusConversation
+				? (
+						await findMessagesByConversationId(
+							statusConversation.conversationId,
+						)
+					).length
+				: 0;
+			process.stdout.write(
+				`\n${renderStatusBar(
+					{
+						model: agent.model || agent.ai?.model || "Not configured",
+						session: statusConversation?.title || "Fresh terminal session",
+						messages: statusMessageCount,
+						tools: availableTools,
+						skills: availableSkills,
+						elapsedMs: Date.now() - sessionStartedAt,
+					},
+					process.stdout.columns ?? 80,
+					colors,
+				)}\n`,
+			);
 			let answer: string;
 			try {
 				answer = await rl.question(`\n${promptText(colors)}`);
@@ -322,7 +357,11 @@ const main = async () => {
 				title: text.slice(0, 80),
 			});
 			activeAbort = new AbortController();
-			spinner.start("Agent is thinking");
+			const stream = new HarnessStreamRenderer(process.stdout, colors, () =>
+				spinner.finish(),
+			);
+			activeStream = stream;
+			spinner.start("pondering...");
 			try {
 				const result = await runAgent({
 					agentId: agent.agentId,
@@ -332,9 +371,15 @@ const main = async () => {
 					conversationId: conversation.conversationId,
 					context,
 					abortSignal: activeAbort.signal,
+					onTextDelta: (delta) => stream.push(delta),
+					onToolStart: ({ toolName }) => {
+						stream.pause();
+						spinner.update(`running ${friendlyToolName(toolName)}...`);
+					},
 					confirmation: {
 						mode: "inline",
 						request: async ({ toolName, summary, toolInput }) => {
+							stream.pause();
 							spinner.stop();
 							const action = await createPendingAction({
 								agentId: agent.agentId,
@@ -348,7 +393,7 @@ const main = async () => {
 								`${warningText("  Approve once?", colors)} [y/N] `,
 							);
 							const approved = /^(?:y|yes)$/i.test(approval.trim());
-							spinner.start("Resuming agent");
+							spinner.start("resuming...");
 							const resolved = await resolvePendingAction(
 								action.actionId,
 								approved,
@@ -360,6 +405,7 @@ const main = async () => {
 						},
 					},
 					onProgress: async ({ step, toolName, success, durationMs }) => {
+						stream.pause();
 						spinner.stop();
 						process.stdout.write(
 							`${renderToolProgress(
@@ -370,14 +416,19 @@ const main = async () => {
 								colors,
 							)}\n`,
 						);
-						spinner.start("Agent is thinking");
+						spinner.start("pondering...");
 					},
 				});
-				spinner.stop();
-				process.stdout.write(
-					`\n${renderMessage("assistant", result.text, colors)}\n`,
-				);
+				if (stream.finish()) {
+					spinner.stop();
+				} else {
+					spinner.finish();
+					process.stdout.write(
+						`\n${renderMessage("assistant", result.text, colors)}\n`,
+					);
+				}
 			} catch (error) {
+				stream.pause();
 				spinner.stop();
 				if (activeAbort.signal.aborted) {
 					process.stdout.write(
@@ -395,6 +446,7 @@ const main = async () => {
 				}
 			} finally {
 				activeAbort = undefined;
+				activeStream = undefined;
 			}
 		}
 	} finally {
