@@ -62,7 +62,10 @@ export const resolvePendingAction = async (
 	const agent = await findAgentById(action.agentId);
 	const caller = await createAgentCaller(agent.userId, agent.organizationId);
 	// No confirmation handler here: the approved tool must actually execute.
-	const tools = buildAgentTools(caller, { toolConfig: agent.toolConfig });
+	const tools = buildAgentTools(caller, {
+		agentId: agent.agentId,
+		toolConfig: agent.toolConfig,
+	});
 	const toolDef = tools[action.toolName];
 
 	let output: string;

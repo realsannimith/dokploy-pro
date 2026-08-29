@@ -1,5 +1,13 @@
 import { relations } from "drizzle-orm";
-import { boolean, jsonb, pgEnum, pgTable, text } from "drizzle-orm/pg-core";
+import {
+	boolean,
+	integer,
+	jsonb,
+	pgEnum,
+	pgTable,
+	text,
+	uniqueIndex,
+} from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { nanoid } from "nanoid";
 import { z } from "zod";
@@ -192,6 +200,42 @@ export const agentPendingAction = pgTable("agent_pending_action", {
 		.$defaultFn(() => new Date().toISOString()),
 });
 
+/**
+ * Reusable procedural knowledge owned by one Dokploy agent. Only the compact
+ * name/description index is placed in the system prompt; full instructions
+ * are loaded on demand, matching the progressive-disclosure skill pattern.
+ */
+export const agentSkill = pgTable(
+	"agent_skill",
+	{
+		skillId: text("skillId")
+			.notNull()
+			.primaryKey()
+			.$defaultFn(() => nanoid()),
+		agentId: text("agentId")
+			.notNull()
+			.references(() => agent.agentId, { onDelete: "cascade" }),
+		name: text("name").notNull(),
+		description: text("description").notNull(),
+		content: text("content").notNull(),
+		origin: text("origin")
+			.$type<"agent" | "admin">()
+			.notNull()
+			.default("agent"),
+		version: integer("version").notNull().default(1),
+		usageCount: integer("usageCount").notNull().default(0),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => [
+		uniqueIndex("agent_skill_agentId_name_index").on(table.agentId, table.name),
+	],
+);
+
 export const agentRelations = relations(agent, ({ one, many }) => ({
 	organization: one(organization, {
 		fields: [agent.organizationId],
@@ -207,6 +251,14 @@ export const agentRelations = relations(agent, ({ one, many }) => ({
 	}),
 	conversations: many(agentConversation),
 	channels: many(agentChannel),
+	skills: many(agentSkill),
+}));
+
+export const agentSkillRelations = relations(agentSkill, ({ one }) => ({
+	agent: one(agent, {
+		fields: [agentSkill.agentId],
+		references: [agent.agentId],
+	}),
 }));
 
 export const agentChannelRelations = relations(agentChannel, ({ one }) => ({
@@ -305,4 +357,19 @@ export const apiSaveAgentMcpConfig = z.object({
 export const apiAgentChat = z.object({
 	message: z.string().min(1, { message: "Message is required" }),
 	conversationId: z.string().optional(),
+});
+
+export const agentSkillNameSchema = z
+	.string()
+	.min(1)
+	.max(64)
+	.regex(
+		/^[a-z0-9]+(?:-[a-z0-9]+)*$/,
+		"Use lowercase letters, numbers, and single hyphens",
+	);
+
+export const apiSaveAgentSkill = z.object({
+	name: agentSkillNameSchema,
+	description: z.string().trim().min(1).max(240),
+	content: z.string().trim().min(1).max(20_000),
 });

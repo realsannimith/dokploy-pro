@@ -5,15 +5,17 @@ import {
 	agentConversation,
 	agentMessage,
 	agentPendingAction,
+	agentSkill,
 } from "@dokploy/server/db/schema";
 import type {
 	AgentMcpConfig,
 	AgentToolConfig,
 	apiSaveAgent,
 	apiSaveAgentChannel,
+	apiSaveAgentSkill,
 } from "@dokploy/server/db/schema/agent";
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import type { z } from "zod";
 
 export const findAgentByOrganizationId = async (organizationId: string) => {
@@ -240,6 +242,30 @@ export const findOrCreateConversation = async (input: {
 	return created[0];
 };
 
+/**
+ * Detaches the chat's active conversation so the next message starts a fresh
+ * one. The old conversation (and its history) stays visible in the dashboard.
+ */
+export const detachConversation = async (
+	agentId: string,
+	source: AgentSource,
+	externalChatId: string,
+) => {
+	if (source === "web") return false;
+	const detached = await db
+		.update(agentConversation)
+		.set({ externalChatId: null })
+		.where(
+			and(
+				eq(agentConversation.agentId, agentId),
+				eq(agentConversation.source, source),
+				eq(agentConversation.externalChatId, externalChatId),
+			),
+		)
+		.returning();
+	return detached.length > 0;
+};
+
 export const findMessagesByConversationId = async (
 	conversationId: string,
 	limit?: number,
@@ -340,4 +366,57 @@ export const updatePendingActionStatus = async (
 		.where(eq(agentPendingAction.actionId, actionId))
 		.returning();
 	return updated[0];
+};
+
+export const findAgentSkills = async (agentId: string) => {
+	return await db.query.agentSkill.findMany({
+		where: eq(agentSkill.agentId, agentId),
+		orderBy: asc(agentSkill.name),
+	});
+};
+
+export const findAgentSkillByName = async (agentId: string, name: string) => {
+	return await db.query.agentSkill.findFirst({
+		where: and(eq(agentSkill.agentId, agentId), eq(agentSkill.name, name)),
+	});
+};
+
+export const saveAgentSkill = async (
+	agentId: string,
+	input: z.infer<typeof apiSaveAgentSkill>,
+	origin: "agent" | "admin" = "agent",
+) => {
+	const now = new Date().toISOString();
+	const saved = await db
+		.insert(agentSkill)
+		.values({ ...input, agentId, origin, updatedAt: now })
+		.onConflictDoUpdate({
+			target: [agentSkill.agentId, agentSkill.name],
+			set: {
+				description: input.description,
+				content: input.content,
+				origin,
+				version: sql`${agentSkill.version} + 1`,
+				updatedAt: now,
+			},
+		})
+		.returning();
+	return saved[0];
+};
+
+export const recordAgentSkillUse = async (skillId: string) => {
+	await db
+		.update(agentSkill)
+		.set({ usageCount: sql`${agentSkill.usageCount} + 1` })
+		.where(eq(agentSkill.skillId, skillId));
+};
+
+export const deleteAgentSkill = async (agentId: string, skillId: string) => {
+	const removed = await db
+		.delete(agentSkill)
+		.where(
+			and(eq(agentSkill.agentId, agentId), eq(agentSkill.skillId, skillId)),
+		)
+		.returning();
+	return removed.length > 0;
 };

@@ -1,6 +1,16 @@
 import { randomBytes } from "node:crypto";
 import type { AgentToolConfig } from "@dokploy/server/db/schema/agent";
+import {
+	agentSkillNameSchema,
+	apiSaveAgentSkill,
+} from "@dokploy/server/db/schema/agent";
 import { generateAppName } from "@dokploy/server/db/schema/utils";
+import {
+	findAgentSkillByName,
+	findAgentSkills,
+	recordAgentSkillUse,
+	saveAgentSkill,
+} from "@dokploy/server/services/agent";
 import { type Tool, tool } from "ai";
 import { z } from "zod";
 import type { AgentCaller } from "./caller";
@@ -48,6 +58,23 @@ export const AGENT_TOOL_META: AgentToolMeta[] = [
 		name: "listContainers",
 		group: "Read",
 		description: "List docker containers",
+	},
+	{
+		name: "listSkills",
+		group: "Read",
+		description: "List reusable skills learned by this agent",
+	},
+	{
+		name: "readSkill",
+		group: "Read",
+		description: "Load one skill's full instructions when relevant",
+	},
+	{
+		name: "manageSkill",
+		group: "Create",
+		description: "Create or improve the agent's reusable procedural skills",
+		summarize: (input) =>
+			`${input.action === "create" ? "Learn" : "Improve"} skill /${input.name}`,
 	},
 	{
 		name: "deployService",
@@ -178,6 +205,7 @@ export interface AgentConfirmationHandler {
 }
 
 export interface BuildAgentToolsOptions {
+	agentId: string;
 	toolConfig?: AgentToolConfig | null;
 	/**
 	 * When set, tools whose resolved setting requires confirmation do not
@@ -331,7 +359,7 @@ const scheduleSummaryKeys = [
 
 export const buildAgentTools = (
 	caller: AgentCaller,
-	options?: BuildAgentToolsOptions,
+	options: BuildAgentToolsOptions,
 ) => {
 	const getService = async (serviceType: ServiceType, serviceId: string) => {
 		switch (serviceType) {
@@ -355,6 +383,81 @@ export const buildAgentTools = (
 	};
 
 	const allTools = {
+		listSkills: tool({
+			description:
+				"List the names, descriptions and versions of reusable skills learned by this Dokploy agent. Full instructions are intentionally omitted; use readSkill only for a relevant skill.",
+			inputSchema: z.object({}),
+			execute: async () => {
+				try {
+					const skills = await findAgentSkills(options.agentId);
+					return toResult(
+						skills.map(
+							({ name, description, version, usageCount, origin }) => ({
+								name,
+								description,
+								version,
+								usageCount,
+								origin,
+							}),
+						),
+					);
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		readSkill: tool({
+			description:
+				"Load one reusable skill's complete instructions. Call this when a skill from the system prompt index is relevant to the current request.",
+			inputSchema: z.object({ name: agentSkillNameSchema }),
+			execute: async ({ name }) => {
+				try {
+					const skill = await findAgentSkillByName(options.agentId, name);
+					if (!skill) return toResult(`Skill /${name} was not found.`);
+					await recordAgentSkillUse(skill.skillId);
+					return toResult({
+						name: skill.name,
+						description: skill.description,
+						version: skill.version,
+						content: skill.content,
+					});
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		manageSkill: tool({
+			description:
+				"Create or improve this agent's reusable procedural knowledge after learning a non-trivial, repeatable Dokploy workflow. Use create only for a new skill and update only after readSkill shows the existing skill. Do not save one-off facts, secrets, credentials, raw logs, or unverified guesses. Content must be concise Markdown with When to use, Procedure, Pitfalls, and Verification sections.",
+			inputSchema: apiSaveAgentSkill.extend({
+				action: z.enum(["create", "update"]),
+			}),
+			execute: async ({ action, name, description, content }) => {
+				try {
+					const existing = await findAgentSkillByName(options.agentId, name);
+					if (action === "create" && existing) {
+						return toResult(
+							`Skill /${name} already exists at version ${existing.version}. Read it first, then use action "update".`,
+						);
+					}
+					if (action === "update" && !existing) {
+						return toResult(
+							`Skill /${name} does not exist. Use action "create" instead.`,
+						);
+					}
+					const saved = await saveAgentSkill(
+						options.agentId,
+						{ name, description, content },
+						"agent",
+					);
+					return toResult(
+						`${action === "create" ? "Created" : "Updated"} /${saved?.name} (version ${saved?.version}).`,
+					);
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
 		listProjects: tool({
 			description:
 				"List every project with its environments and services (name, id, type, status). Use this first to find the service the user is talking about.",
@@ -1103,9 +1206,9 @@ export const buildAgentTools = (
 	for (const [name, toolDef] of Object.entries(
 		allTools as Record<string, Tool>,
 	)) {
-		const setting = resolveToolSetting(name, options?.toolConfig);
+		const setting = resolveToolSetting(name, options.toolConfig);
 		if (!setting.enabled) continue;
-		const confirmation = options?.confirmation;
+		const confirmation = options.confirmation;
 		if (setting.confirm && confirmation) {
 			tools[name] = {
 				...toolDef,

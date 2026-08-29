@@ -10,6 +10,7 @@ import {
 	AgentMcp,
 	AgentTools,
 } from "@/components/dashboard/settings/agent/agent-permissions";
+import { AgentSkills } from "@/components/dashboard/settings/agent/agent-skills";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { appRouter } from "@/server/api/root";
 
@@ -18,6 +19,7 @@ const Page = () => {
 		<div className="flex flex-col gap-4 w-full">
 			<AgentForm />
 			<AgentChannels />
+			<AgentSkills />
 			<AgentTools />
 			<AgentMcp />
 			<AgentChat />

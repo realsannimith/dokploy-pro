@@ -194,6 +194,15 @@ export const startTelegram = ({
 
 	const loop = async () => {
 		let offset = 0;
+		// Best-effort: publish the shared agent commands in Telegram's menu.
+		void telegramApi(token, "setMyCommands", {
+			commands: [
+				{ command: "new", description: "Start a fresh conversation" },
+				{ command: "skills", description: "List reusable agent skills" },
+				{ command: "learn", description: "Teach the agent a workflow" },
+				{ command: "help", description: "Show what the agent can do" },
+			],
+		}).catch(() => {});
 		// Skip updates queued while the gateway was down so the bot doesn't
 		// replay old commands after a restart.
 		try {
@@ -253,6 +262,7 @@ export const startTelegram = ({
 							text: message.text,
 							identifiers: [message.from?.id, message.from?.username],
 							reply: (text) => sendMessage(token, message.chat.id, text),
+							sendProgress: (text) => sendMessage(token, message.chat.id, text),
 							sendConfirmation: ({ actionId, summary }) =>
 								sendConfirmationButtons(
 									token,
