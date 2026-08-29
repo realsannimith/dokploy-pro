@@ -131,10 +131,14 @@ describe("Dokploy Pro terminal harness UI", () => {
 			placeholder: "Ask Dokploy anything…",
 		};
 		const empty = renderComposerView(question, "", 0, 80, false);
-		expect(empty.text).toContain("─ ready │");
-		expect(empty.text).toContain("❯ Ask Dokploy anything…");
-		expect(empty.cursorRow).toBe(2);
-		expect(empty.cursorColumn).toBe(2);
+		expect(empty.text).toContain("╭─ ready │");
+		expect(empty.text).toContain("│ ❯ Ask Dokploy anything…");
+		expect(empty.text).toContain("╰────────────────");
+		expect(empty.cursorRow).toBe(1);
+		expect(empty.cursorColumn).toBe(4);
+		for (const line of empty.text.split("\n")) {
+			expect([...line].length).toBe(79);
+		}
 
 		const multiline = renderComposerView(
 			question,
@@ -144,8 +148,11 @@ describe("Dokploy Pro terminal harness UI", () => {
 			false,
 		);
 		expect(multiline.rows).toBeGreaterThan(3);
-		expect(multiline.text).toContain("❯ Deploy the application safely");
-		expect(multiline.text).toContain("  and verify the health check");
+		expect(multiline.text).toContain("│ ❯ Deploy the application");
+		expect(multiline.text).toContain("│   and verify the health");
+		for (const line of multiline.text.split("\n")) {
+			expect([...line].length).toBe(33);
+		}
 	});
 
 	it("streams assistant deltas with a live cursor and inline styling", () => {

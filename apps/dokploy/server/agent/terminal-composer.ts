@@ -77,11 +77,16 @@ export const renderComposerView = (
 	columns = 80,
 	colors = true,
 ): ComposerView => {
-	const width = Math.max(18, columns - 1);
+	const frameWidth = Math.max(18, columns - 1);
+	const innerWidth = frameWidth - 2;
+	const contentWidth = innerWidth - 2;
 	const label = question.label ? `${question.label}: ` : "";
 	const prefixPlain = `❯ ${label}`;
-	const prefixWidth = Math.min(width - 1, characters(prefixPlain).length);
-	const inputWidth = Math.max(1, width - prefixWidth);
+	const prefixWidth = Math.min(
+		contentWidth - 1,
+		characters(prefixPlain).length,
+	);
+	const inputWidth = Math.max(1, contentWidth - prefixWidth);
 	const input = layoutValue(value, cursor, inputWidth);
 	const prefix = `${promptText(colors)}${
 		question.tone === "warning" ? warningText(label, colors) : label
@@ -89,21 +94,40 @@ export const renderComposerView = (
 	const blankPrefix = " ".repeat(prefixWidth);
 	const inputLines = input.lines.map((line, index) => {
 		const renderedPrefix = index === 0 ? prefix : blankPrefix;
+		const plainLength = prefixWidth + characters(line).length;
+		const padding = " ".repeat(Math.max(0, contentWidth - plainLength));
+		const leftBorder = dimText("│ ", colors);
+		const rightBorder = dimText(" │", colors);
 		if (index === 0 && !value && question.placeholder) {
-			return `${renderedPrefix}${dimText(question.placeholder, colors)}`;
+			const placeholder = question.placeholder.slice(0, inputWidth);
+			const placeholderPadding = " ".repeat(
+				Math.max(
+					0,
+					contentWidth - prefixWidth - characters(placeholder).length,
+				),
+			);
+			return `${leftBorder}${renderedPrefix}${dimText(
+				placeholder,
+				colors,
+			)}${placeholderPadding}${rightBorder}`;
 		}
-		return `${renderedPrefix}${line}`;
+		return `${leftBorder}${renderedPrefix}${line}${padding}${rightBorder}`;
 	});
-	const chrome = question.status
-		? [renderStatusBar(question.status, columns, colors), ""]
-		: [];
-	const lines = [...chrome, ...inputLines];
+	const top = question.status
+		? `${dimText("╭", colors)}${renderStatusBar(
+				question.status,
+				frameWidth - 1,
+				colors,
+			)}${dimText("╮", colors)}`
+		: dimText(`╭${"─".repeat(innerWidth)}╮`, colors);
+	const bottom = dimText(`╰${"─".repeat(innerWidth)}╯`, colors);
+	const lines = [top, ...inputLines, bottom];
 
 	return {
 		text: lines.join("\n"),
 		rows: lines.length,
-		cursorRow: chrome.length + input.cursorRow,
-		cursorColumn: prefixWidth + input.cursorColumn,
+		cursorRow: 1 + input.cursorRow,
+		cursorColumn: 2 + prefixWidth + input.cursorColumn,
 	};
 };
 

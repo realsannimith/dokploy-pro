@@ -205,7 +205,7 @@ export const renderStatusBar = (
 	columns = 80,
 	colors = true,
 ) => {
-	const width = Math.max(18, columns - 1);
+	const width = Math.max(12, columns - 1);
 	const model = clip(data.model, columns >= 76 ? 26 : 18);
 	const session = clip(data.session, Math.max(10, Math.floor(columns / 3)));
 	const elapsed = formatElapsed(data.elapsedMs);
