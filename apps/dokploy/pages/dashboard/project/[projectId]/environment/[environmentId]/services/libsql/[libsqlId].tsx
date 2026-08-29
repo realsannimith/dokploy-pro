@@ -16,6 +16,7 @@ import { ShowEnvironment } from "@/components/dashboard/application/environment/
 import { ShowDockerLogs } from "@/components/dashboard/application/logs/show";
 import { DeleteService } from "@/components/dashboard/compose/delete-service";
 import { ShowBackups } from "@/components/dashboard/database/backups/show-backups";
+import { DatabaseIde } from "@/components/dashboard/database/database-ide";
 import { ShowExternalLibsqlCredentials } from "@/components/dashboard/libsql/general/show-external-libsql-credentials";
 import { ShowGeneralLibsql } from "@/components/dashboard/libsql/general/show-general-libsql";
 import { ShowInternalLibsqlCredentials } from "@/components/dashboard/libsql/general/show-internal-libsql-credentials";
@@ -49,7 +50,14 @@ import { cn } from "@/lib/utils";
 import { appRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
 
-type TabState = "projects" | "monitoring" | "settings" | "backups" | "advanced";
+type TabState =
+	| "general"
+	| "ide"
+	| "environment"
+	| "logs"
+	| "monitoring"
+	| "backups"
+	| "advanced";
 
 const Libsql = (
 	props: InferGetServerSidePropsType<typeof getServerSideProps>,
@@ -62,6 +70,7 @@ const Libsql = (
 	const [tab, setSab] = useState<TabState>(activeTab);
 	const { data } = api.libsql.one.useQuery({ libsqlId });
 	const { data: auth } = api.user.get.useQuery();
+	const { data: permissions } = api.user.getPermissions.useQuery();
 
 	const { data: serverIp } = api.settings.getIp.useQuery();
 
@@ -189,10 +198,11 @@ const Libsql = (
 										<TabsList
 											className={cn(
 												"md:grid md:w-fit max-md:overflow-y-scroll justify-start",
-												"md:grid-cols-6",
+												"md:grid-cols-7",
 											)}
 										>
 											<TabsTrigger value="general">General</TabsTrigger>
+											<TabsTrigger value="ide">IDE</TabsTrigger>
 											<TabsTrigger value="environment">Environment</TabsTrigger>
 											<TabsTrigger value="logs">Logs</TabsTrigger>
 											{(data?.serverId || !data?.server) && (
@@ -209,6 +219,14 @@ const Libsql = (
 											<ShowInternalLibsqlCredentials libsqlId={libsqlId} />
 											<ShowExternalLibsqlCredentials libsqlId={libsqlId} />
 										</div>
+									</TabsContent>
+									<TabsContent value="ide">
+										<DatabaseIde
+											canExecute={permissions?.service.create === true}
+											databaseId={libsqlId}
+											databaseType="libsql"
+											status={data?.applicationStatus}
+										/>
 									</TabsContent>
 									<TabsContent value="environment">
 										<div className="flex flex-col gap-4 pt-2.5">

@@ -25,6 +25,16 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 
+const SOURCE_LABELS: Record<string, string> = {
+	telegram: "Telegram",
+	discord: "Discord",
+	slack: "Slack",
+	whatsapp: "WhatsApp",
+	signal: "Signal",
+	email: "Email",
+	web: "Web",
+};
+
 const parseToolCalls = (raw?: string | null): AgentToolCall[] => {
 	if (!raw) return [];
 	try {
@@ -140,9 +150,8 @@ export const AgentChat = () => {
 													{conversation.title || "Untitled"}
 												</span>
 												<span className="text-xs text-muted-foreground">
-													{conversation.source === "telegram"
-														? "Telegram"
-														: "Web"}{" "}
+													{SOURCE_LABELS[conversation.source] ??
+														conversation.source}{" "}
 													· {new Date(conversation.updatedAt).toLocaleString()}
 												</span>
 											</div>

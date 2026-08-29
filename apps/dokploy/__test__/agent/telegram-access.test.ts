@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isAllowed, parseAllowlist } from "@/server/agent/access";
+import {
+	isAllowed,
+	matchesAllowlist,
+	parseAllowlist,
+} from "@/server/agent/access";
 
 describe("parseAllowlist", () => {
 	it("parses comma separated ids", () => {
@@ -43,9 +47,35 @@ describe("isAllowed", () => {
 	});
 
 	it("does not allow a user whose id matches someone else's username", () => {
-		expect(isAllowed(parseAllowlist("@123"), { id: 999, username: "123" })).toBe(
-			true,
-		);
+		expect(
+			isAllowed(parseAllowlist("@123"), { id: 999, username: "123" }),
+		).toBe(true);
 		expect(isAllowed(parseAllowlist("@abc"), { id: 999 })).toBe(false);
+	});
+});
+
+describe("matchesAllowlist", () => {
+	it("denies when the allowlist is empty, whatever the identifiers", () => {
+		expect(matchesAllowlist([], ["someone@example.com", 42])).toBe(false);
+	});
+
+	it("matches any one of several identifiers", () => {
+		const allowlist = parseAllowlist("U01ABCDEF");
+		expect(matchesAllowlist(allowlist, ["other", "U01ABCDEF"])).toBe(true);
+	});
+
+	it("matches emails and phone numbers case-insensitively", () => {
+		expect(
+			matchesAllowlist(parseAllowlist("Ops@Example.com"), ["ops@example.com"]),
+		).toBe(true);
+		expect(
+			matchesAllowlist(parseAllowlist("+855123456789"), ["+855123456789"]),
+		).toBe(true);
+	});
+
+	it("ignores null, undefined and empty identifiers", () => {
+		expect(matchesAllowlist(parseAllowlist("123"), [null, undefined, ""])).toBe(
+			false,
+		);
 	});
 });

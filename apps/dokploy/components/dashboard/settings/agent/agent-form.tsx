@@ -1,6 +1,6 @@
 "use client";
 import { standardSchemaResolver as zodResolver } from "@hookform/resolvers/standard-schema";
-import { Bot, ExternalLink, Loader2 } from "lucide-react";
+import { Bot, Check, ChevronDown, Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -15,6 +15,13 @@ import {
 	CardTitle,
 } from "@/components/ui/card";
 import {
+	Command,
+	CommandEmpty,
+	CommandInput,
+	CommandItem,
+	CommandList,
+} from "@/components/ui/command";
+import {
 	Form,
 	FormControl,
 	FormDescription,
@@ -25,6 +32,11 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import {
+	Popover,
+	PopoverContent,
+	PopoverTrigger,
+} from "@/components/ui/popover";
+import {
 	Select,
 	SelectContent,
 	SelectItem,
@@ -33,16 +45,15 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 
 const Schema = z.object({
 	name: z.string().min(1, { message: "Name is required" }),
 	isEnabled: z.boolean(),
 	aiId: z.string().optional(),
+	model: z.string().optional(),
 	instructions: z.string().optional(),
-	telegramEnabled: z.boolean(),
-	telegramBotToken: z.string().optional(),
-	telegramAllowedUserIds: z.string().optional(),
 });
 
 type Schema = z.infer<typeof Schema>;
@@ -52,13 +63,9 @@ export const AgentForm = () => {
 	const { data: aiSettings } = api.ai.getAll.useQuery();
 	const { mutateAsync: save, isPending: isSaving } =
 		api.agent.save.useMutation();
-	const { mutateAsync: testBot, isPending: isTesting } =
-		api.agent.testTelegramBot.useMutation();
 	const utils = api.useUtils();
-	const [botInfo, setBotInfo] = useState<{
-		username: string;
-		name: string;
-	} | null>(null);
+	const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
+	const [modelSearch, setModelSearch] = useState("");
 
 	const form = useForm<Schema>({
 		resolver: zodResolver(Schema),
@@ -66,10 +73,8 @@ export const AgentForm = () => {
 			name: "Dokploy Agent",
 			isEnabled: false,
 			aiId: "",
+			model: "",
 			instructions: "",
-			telegramEnabled: false,
-			telegramBotToken: "",
-			telegramAllowedUserIds: "",
 		},
 	});
 
@@ -79,10 +84,8 @@ export const AgentForm = () => {
 				name: agent.name,
 				isEnabled: agent.isEnabled,
 				aiId: agent.aiId || "",
+				model: agent.model || "",
 				instructions: agent.instructions || "",
-				telegramEnabled: agent.telegramEnabled,
-				telegramBotToken: agent.telegramBotToken || "",
-				telegramAllowedUserIds: agent.telegramAllowedUserIds || "",
 			});
 		}
 	}, [agent]);
@@ -90,36 +93,32 @@ export const AgentForm = () => {
 	const enabledProviders = (aiSettings ?? []).filter(
 		(provider) => provider.isEnabled,
 	);
+	const selectedAiId = form.watch("aiId");
+	const selectedProvider = enabledProviders.find(
+		(provider) => provider.aiId === selectedAiId,
+	);
+
+	const { data: models, isFetching: isLoadingModels } =
+		api.ai.getModels.useQuery(
+			{
+				apiUrl: selectedProvider?.apiUrl ?? "",
+				apiKey: selectedProvider?.apiKey ?? "",
+			},
+			{ enabled: !!selectedProvider?.apiUrl },
+		);
 
 	const onSubmit = async (data: Schema) => {
 		try {
 			await save({
 				...data,
 				aiId: data.aiId || null,
+				model: data.model || null,
 			});
 			await utils.agent.get.invalidate();
 			toast.success("Agent settings saved");
 			refetch();
 		} catch (error) {
 			toast.error("Failed to save agent settings", {
-				description: error instanceof Error ? error.message : "Unknown error",
-			});
-		}
-	};
-
-	const handleTestBot = async () => {
-		const token = form.getValues("telegramBotToken");
-		if (!token) {
-			toast.error("Enter a bot token first");
-			return;
-		}
-		try {
-			const info = await testBot({ token });
-			setBotInfo(info);
-			toast.success(`Connected to @${info.username}`);
-		} catch (error) {
-			setBotInfo(null);
-			toast.error("Could not connect to Telegram", {
 				description: error instanceof Error ? error.message : "Unknown error",
 			});
 		}
@@ -136,8 +135,7 @@ export const AgentForm = () => {
 					<CardDescription>
 						An assistant that manages this Dokploy instance through chat. It
 						uses the same API as the dashboard, so everything it does shows up
-						here — deployments, backups, audit log. Connect it to Telegram or
-						talk to it from the playground below.
+						here — deployments, backups, audit log.
 					</CardDescription>
 				</CardHeader>
 				<CardContent>
@@ -157,7 +155,7 @@ export const AgentForm = () => {
 										<div className="space-y-0.5">
 											<FormLabel>Enable agent</FormLabel>
 											<FormDescription>
-												Master switch for the agent and all its gateways.
+												Master switch for the agent and every chat gateway.
 											</FormDescription>
 										</div>
 										<FormControl>
@@ -188,9 +186,13 @@ export const AgentForm = () => {
 									name="aiId"
 									render={({ field }) => (
 										<FormItem>
-											<FormLabel>AI Provider</FormLabel>
+											<FormLabel>Provider</FormLabel>
 											<Select
-												onValueChange={field.onChange}
+												onValueChange={(value) => {
+													field.onChange(value);
+													// Models differ per provider; drop a stale override.
+													form.setValue("model", "");
+												}}
 												value={field.value}
 											>
 												<FormControl>
@@ -204,7 +206,7 @@ export const AgentForm = () => {
 															key={provider.aiId}
 															value={provider.aiId}
 														>
-															{provider.name} ({provider.model})
+															{provider.name}
 														</SelectItem>
 													))}
 												</SelectContent>
@@ -217,6 +219,127 @@ export const AgentForm = () => {
 									)}
 								/>
 							</div>
+
+							<FormField
+								control={form.control}
+								name="model"
+								render={({ field }) => {
+									const selected = models?.find((m) => m.id === field.value);
+									const filtered = (models ?? []).filter((model) =>
+										model.id.toLowerCase().includes(modelSearch.toLowerCase()),
+									);
+									const display =
+										field.value && !filtered.find((m) => m.id === field.value)
+											? selected
+												? [selected, ...filtered]
+												: filtered
+											: filtered;
+
+									return (
+										<FormItem>
+											<FormLabel>Model</FormLabel>
+											<Popover
+												open={modelPopoverOpen}
+												onOpenChange={setModelPopoverOpen}
+											>
+												<PopoverTrigger asChild disabled={!selectedProvider}>
+													<FormControl>
+														<Button
+															variant="outline"
+															className={cn(
+																"w-full justify-between",
+																!field.value && "text-muted-foreground",
+															)}
+														>
+															{isLoadingModels
+																? "Loading models..."
+																: field.value ||
+																	(selectedProvider
+																		? `Provider default (${selectedProvider.model})`
+																		: "Select a provider first")}
+															<ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+														</Button>
+													</FormControl>
+												</PopoverTrigger>
+												<PopoverContent className="w-[400px] p-0" align="start">
+													<Command>
+														<CommandInput
+															placeholder="Search or type a custom model..."
+															value={modelSearch}
+															onValueChange={setModelSearch}
+														/>
+														<CommandList>
+															<CommandEmpty>
+																{modelSearch ? (
+																	<button
+																		type="button"
+																		className="w-full cursor-pointer px-2 py-1.5 text-left text-sm hover:bg-accent"
+																		onClick={() => {
+																			field.onChange(modelSearch);
+																			setModelPopoverOpen(false);
+																			setModelSearch("");
+																		}}
+																	>
+																		Use custom model: "{modelSearch}"
+																	</button>
+																) : (
+																	"No models found."
+																)}
+															</CommandEmpty>
+															<CommandItem
+																value="__default__"
+																onSelect={() => {
+																	field.onChange("");
+																	setModelPopoverOpen(false);
+																	setModelSearch("");
+																}}
+															>
+																<Check
+																	className={cn(
+																		"mr-2 h-4 w-4",
+																		field.value ? "opacity-0" : "opacity-100",
+																	)}
+																/>
+																Provider default
+																{selectedProvider
+																	? ` (${selectedProvider.model})`
+																	: ""}
+															</CommandItem>
+															{display.map((model) => (
+																<CommandItem
+																	key={model.id}
+																	value={model.id}
+																	onSelect={() => {
+																		field.onChange(model.id);
+																		setModelPopoverOpen(false);
+																		setModelSearch("");
+																	}}
+																>
+																	<Check
+																		className={cn(
+																			"mr-2 h-4 w-4",
+																			field.value === model.id
+																				? "opacity-100"
+																				: "opacity-0",
+																		)}
+																	/>
+																	{model.id}
+																</CommandItem>
+															))}
+														</CommandList>
+													</Command>
+												</PopoverContent>
+											</Popover>
+											<FormDescription>
+												Fetched live from the provider. Leave on "Provider
+												default" to follow the model set in Settings → AI.
+											</FormDescription>
+											<FormMessage />
+										</FormItem>
+									);
+								}}
+							/>
+
 							<FormField
 								control={form.control}
 								name="instructions"
@@ -234,91 +357,6 @@ export const AgentForm = () => {
 									</FormItem>
 								)}
 							/>
-
-							<div className="rounded-lg border p-4 flex flex-col gap-4">
-								<FormField
-									control={form.control}
-									name="telegramEnabled"
-									render={({ field }) => (
-										<FormItem className="flex flex-row items-center justify-between">
-											<div className="space-y-0.5">
-												<FormLabel>Telegram gateway</FormLabel>
-												<FormDescription>
-													Talk to the agent from Telegram. Create a bot with
-													@BotFather, paste its token here.
-												</FormDescription>
-											</div>
-											<FormControl>
-												<Switch
-													checked={field.value}
-													onCheckedChange={field.onChange}
-												/>
-											</FormControl>
-										</FormItem>
-									)}
-								/>
-								<div className="grid md:grid-cols-2 gap-4">
-									<FormField
-										control={form.control}
-										name="telegramBotToken"
-										render={({ field }) => (
-											<FormItem>
-												<FormLabel>Bot token</FormLabel>
-												<FormControl>
-													<Input
-														type="password"
-														placeholder="123456789:AA..."
-														{...field}
-													/>
-												</FormControl>
-												<FormMessage />
-											</FormItem>
-										)}
-									/>
-									<FormField
-										control={form.control}
-										name="telegramAllowedUserIds"
-										render={({ field }) => (
-											<FormItem>
-												<FormLabel>Allowed Telegram users</FormLabel>
-												<FormControl>
-													<Input
-														placeholder="123456789, @myusername"
-														{...field}
-													/>
-												</FormControl>
-												<FormDescription>
-													Comma-separated Telegram user IDs or @usernames.
-													Anyone else is rejected. Message the bot once to see
-													your ID.
-												</FormDescription>
-												<FormMessage />
-											</FormItem>
-										)}
-									/>
-								</div>
-								<div className="flex items-center gap-3">
-									<Button
-										type="button"
-										variant="outline"
-										onClick={handleTestBot}
-										disabled={isTesting}
-									>
-										{isTesting && <Loader2 className="size-4 animate-spin" />}
-										Test bot connection
-									</Button>
-									{botInfo && (
-										<a
-											href={`https://t.me/${botInfo.username}`}
-											target="_blank"
-											rel="noreferrer"
-											className="text-sm text-primary flex items-center gap-1"
-										>
-											@{botInfo.username} <ExternalLink className="size-3.5" />
-										</a>
-									)}
-								</div>
-							</div>
 
 							<div className="flex justify-end">
 								<Button type="submit" disabled={isSaving}>

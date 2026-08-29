@@ -1,4 +1,8 @@
 "use client";
+import {
+	AI_PROVIDER_PRESETS,
+	isKeyOptional,
+} from "@dokploy/server/utils/ai/providers";
 import { standardSchemaResolver as zodResolver } from "@hookform/resolvers/standard-schema";
 import {
 	Check,
@@ -55,22 +59,7 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 
-const AI_PROVIDERS = [
-	{ name: "OpenAI", apiUrl: "https://api.openai.com/v1" },
-	{ name: "Anthropic", apiUrl: "https://api.anthropic.com/v1" },
-	{
-		name: "Google Gemini",
-		apiUrl: "https://generativelanguage.googleapis.com/v1beta",
-	},
-	{ name: "Mistral", apiUrl: "https://api.mistral.ai/v1" },
-	{ name: "Cohere", apiUrl: "https://api.cohere.ai/v2" },
-	{ name: "Perplexity", apiUrl: "https://api.perplexity.ai" },
-	{ name: "DeepInfra", apiUrl: "https://api.deepinfra.com/v1/openai" },
-	{ name: "Ollama", apiUrl: "http://localhost:11434" },
-	{ name: "OpenRouter", apiUrl: "https://openrouter.ai/api/v1" },
-	{ name: "Z.AI", apiUrl: "https://api.z.ai/api/paas/v4" },
-	{ name: "MiniMax", apiUrl: "https://api.minimax.io/v1" },
-] as const;
+const AI_PROVIDERS = AI_PROVIDER_PRESETS;
 
 const Schema = z.object({
 	name: z.string().min(1, { message: "Name is required" }),
@@ -139,7 +128,7 @@ export const HandleAi = ({ aiId }: Props) => {
 	// Any Ollama instance on the default port 11434 is treated as no-auth
 	// (covers localhost and self-hosted LAN deployments). Ollama Cloud
 	// (ollama.com on 443) falls through and requires an API key.
-	const isLocalOllama = apiUrl.includes(":11434");
+	const isLocalOllama = isKeyOptional(apiUrl);
 	const {
 		data: models,
 		isFetching: isLoadingServerModels,

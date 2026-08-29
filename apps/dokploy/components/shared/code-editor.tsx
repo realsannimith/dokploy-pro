@@ -15,6 +15,12 @@ import {
 } from "@codemirror/language";
 import { properties } from "@codemirror/legacy-modes/mode/properties";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
+import {
+	mariaDB,
+	mySQL,
+	pgSQL,
+	sqlite,
+} from "@codemirror/legacy-modes/mode/sql";
 import { search, searchKeymap } from "@codemirror/search";
 import { EditorView, keymap } from "@codemirror/view";
 import { githubDark, githubLight } from "@uiw/codemirror-theme-github";
@@ -158,7 +164,16 @@ function dockerComposeComplete(
 interface Props extends ReactCodeMirrorProps {
 	wrapperClassName?: string;
 	disabled?: boolean;
-	language?: "yaml" | "json" | "properties" | "shell" | "css";
+	language?:
+		| "yaml"
+		| "json"
+		| "properties"
+		| "shell"
+		| "css"
+		| "postgres"
+		| "mysql"
+		| "mariadb"
+		| "libsql";
 	lineWrapping?: boolean;
 	lineNumbers?: boolean;
 	completionSource?: CompletionSource;
@@ -195,13 +210,21 @@ export const CodeEditor = ({
 								? css()
 								: language === "shell"
 									? StreamLanguage.define(shell)
-									: StreamLanguage.define({
-											...properties,
-											// The legacy properties mode lacks comment metadata, so
-											// CodeMirror's toggle-comment shortcut (Mod-/) has no comment
-											// token to use. Declare `#` as the line comment for env editors.
-											languageData: { commentTokens: { line: "#" } },
-										}),
+									: language === "postgres"
+										? StreamLanguage.define(pgSQL)
+										: language === "mysql"
+											? StreamLanguage.define(mySQL)
+											: language === "mariadb"
+												? StreamLanguage.define(mariaDB)
+												: language === "libsql"
+													? StreamLanguage.define(sqlite)
+													: StreamLanguage.define({
+															...properties,
+															// The legacy properties mode lacks comment metadata, so
+															// CodeMirror's toggle-comment shortcut (Mod-/) has no comment
+															// token to use. Declare `#` as the line comment for env editors.
+															languageData: { commentTokens: { line: "#" } },
+														}),
 					props.lineWrapping ? EditorView.lineWrapping : [],
 					completionSource
 						? autocompletion({

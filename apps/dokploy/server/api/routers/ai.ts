@@ -26,6 +26,10 @@ import {
 } from "@dokploy/server/services/permission";
 import { findProjectById } from "@dokploy/server/services/project";
 import {
+	findPresetByApiUrl,
+	isKeyOptional,
+} from "@dokploy/server/utils/ai/providers";
+import {
 	getProviderHeaders,
 	getProviderName,
 	type Model,
@@ -66,71 +70,23 @@ export const aiRouter = createTRPCRouter({
 							{ headers: {} },
 						);
 						break;
-					case "perplexity":
-						// Perplexity doesn't have a /models endpoint, return hardcoded list
-						return [
-							{
-								id: "sonar-deep-research",
+					default: {
+						const preset = findPresetByApiUrl(input.apiUrl);
+						if (preset?.staticModels) {
+							return preset.staticModels.map((id) => ({
+								id,
 								object: "model",
 								created: Date.now(),
-								owned_by: "perplexity",
-							},
-							{
-								id: "sonar-reasoning-pro",
-								object: "model",
-								created: Date.now(),
-								owned_by: "perplexity",
-							},
-							{
-								id: "sonar-reasoning",
-								object: "model",
-								created: Date.now(),
-								owned_by: "perplexity",
-							},
-							{
-								id: "sonar-pro",
-								object: "model",
-								created: Date.now(),
-								owned_by: "perplexity",
-							},
-							{
-								id: "sonar",
-								object: "model",
-								created: Date.now(),
-								owned_by: "perplexity",
-							},
-						] as Model[];
-					case "zai":
-						return [
-							{
-								id: "glm-5",
-								object: "model",
-								created: Date.now(),
-								owned_by: "zai",
-							},
-							{
-								id: "glm-4.7",
-								object: "model",
-								created: Date.now(),
-								owned_by: "zai",
-							},
-						] as Model[];
-					case "minimax":
-						return [
-							{
-								id: "MiniMax-M2.7",
-								object: "model",
-								created: Date.now(),
-								owned_by: "minimax",
-							},
-						] as Model[];
-					default:
-						if (!input.apiKey)
+								owned_by: preset.id,
+							})) as Model[];
+						}
+						if (!input.apiKey && !isKeyOptional(input.apiUrl))
 							throw new TRPCError({
 								code: "BAD_REQUEST",
 								message: "API key must contain at least 1 character(s)",
 							});
 						response = await fetch(`${input.apiUrl}/models`, { headers });
+					}
 				}
 
 				if (!response.ok) {

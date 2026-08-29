@@ -1,19 +1,30 @@
-import { apiAgentChat, apiSaveAgent } from "@dokploy/server/db/schema/agent";
 import {
+	apiAgentChat,
+	apiSaveAgent,
+	apiSaveAgentChannel,
+} from "@dokploy/server/db/schema/agent";
+import {
+	deleteAgentChannel,
 	deleteConversation,
 	findAgentByOrganizationId,
+	findChannelById,
+	findChannelsByAgentId,
 	findConversationById,
 	findConversationsByAgentId,
 	findMessagesByConversationId,
 	saveAgent,
+	saveAgentChannel,
 } from "@dokploy/server/services/agent";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { reloadAgentGateways } from "@/server/agent/gateways";
+import { getDiscordBotInfo } from "@/server/agent/gateways/discord";
+import { verifyEmailChannel } from "@/server/agent/gateways/email";
+import { getSignalInfo } from "@/server/agent/gateways/signal";
+import { getSlackBotInfo } from "@/server/agent/gateways/slack";
+import { getTelegramBotInfo } from "@/server/agent/gateways/telegram";
+import { getWhatsappInfo } from "@/server/agent/gateways/whatsapp";
 import { runAgent } from "@/server/agent/run-agent";
-import {
-	getTelegramBotInfo,
-	reloadAgentGateway,
-} from "@/server/agent/telegram-gateway";
 import { adminProcedure, createTRPCRouter } from "@/server/api/trpc";
 
 const requireAgent = async (organizationId: string) => {
@@ -42,6 +53,24 @@ const requireConversation = async (
 	return conversation;
 };
 
+const requireChannel = async (organizationId: string, channelId: string) => {
+	const agent = await requireAgent(organizationId);
+	const channel = await findChannelById(channelId);
+	if (channel.agentId !== agent.agentId) {
+		throw new TRPCError({
+			code: "FORBIDDEN",
+			message: "You don't have access to this channel",
+		});
+	}
+	return { agent, channel };
+};
+
+const toTRPCError = (error: unknown) =>
+	new TRPCError({
+		code: "BAD_REQUEST",
+		message: error instanceof Error ? error.message : `Error: ${error}`,
+	});
+
 export const agentRouter = createTRPCRouter({
 	get: adminProcedure.query(async ({ ctx }) => {
 		const agent = await findAgentByOrganizationId(
@@ -56,27 +85,93 @@ export const agentRouter = createTRPCRouter({
 			ctx.user.id,
 			input,
 		);
-		await reloadAgentGateway(ctx.session.activeOrganizationId);
+		await reloadAgentGateways(ctx.session.activeOrganizationId);
 		return agent;
 	}),
 
-	testTelegramBot: adminProcedure
-		.input(z.object({ token: z.string().min(1) }))
-		.mutation(async ({ input }) => {
+	channels: adminProcedure.query(async ({ ctx }) => {
+		const agent = await findAgentByOrganizationId(
+			ctx.session.activeOrganizationId,
+		);
+		if (!agent) return [];
+		return await findChannelsByAgentId(agent.agentId);
+	}),
+
+	saveChannel: adminProcedure
+		.input(apiSaveAgentChannel)
+		.mutation(async ({ ctx, input }) => {
+			const agent = await requireAgent(ctx.session.activeOrganizationId);
+			if (input.channelId) {
+				await requireChannel(ctx.session.activeOrganizationId, input.channelId);
+			}
+			const channel = await saveAgentChannel(agent.agentId, input);
+			await reloadAgentGateways(ctx.session.activeOrganizationId);
+			return channel;
+		}),
+
+	deleteChannel: adminProcedure
+		.input(z.object({ channelId: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			await requireChannel(ctx.session.activeOrganizationId, input.channelId);
+			const result = await deleteAgentChannel(input.channelId);
+			await reloadAgentGateways(ctx.session.activeOrganizationId);
+			return result;
+		}),
+
+	testChannel: adminProcedure
+		.input(apiSaveAgentChannel)
+		.mutation(async ({ ctx, input }) => {
+			// Fall back to stored secrets so a user can test without retyping them.
+			let credentials = input.credentials;
+			if (input.channelId) {
+				const { channel } = await requireChannel(
+					ctx.session.activeOrganizationId,
+					input.channelId,
+				);
+				credentials = { ...channel.credentials, ...input.credentials };
+			}
+
 			try {
-				const bot = await getTelegramBotInfo(input.token);
-				return {
-					username: bot.username,
-					name: bot.first_name,
-				};
+				switch (input.type) {
+					case "telegram": {
+						const bot = await getTelegramBotInfo(credentials.botToken || "");
+						return {
+							label: `@${bot.username}`,
+							url: `https://t.me/${bot.username}`,
+						};
+					}
+					case "discord": {
+						const bot = await getDiscordBotInfo(credentials.botToken || "");
+						return { label: `${bot.username} (${bot.id})` };
+					}
+					case "slack": {
+						const info = await getSlackBotInfo(
+							credentials.botToken || "",
+							credentials.appToken || "",
+						);
+						return { label: `${info.user} on ${info.team}` };
+					}
+					case "whatsapp": {
+						const info = await getWhatsappInfo(
+							credentials.accessToken || "",
+							credentials.phoneNumberId || "",
+						);
+						return { label: `${info.name} ${info.number}`.trim() };
+					}
+					case "signal": {
+						await getSignalInfo(
+							credentials.apiUrl || "",
+							credentials.number || "",
+						);
+						return { label: `${credentials.number} registered` };
+					}
+					case "email": {
+						await verifyEmailChannel(credentials);
+						return { label: "IMAP and SMTP reachable" };
+					}
+				}
 			} catch (error) {
-				throw new TRPCError({
-					code: "BAD_REQUEST",
-					message:
-						error instanceof Error
-							? error.message
-							: "Failed to connect to Telegram",
-				});
+				throw toTRPCError(error);
 			}
 		}),
 
@@ -90,10 +185,7 @@ export const agentRouter = createTRPCRouter({
 				conversationId: input.conversationId,
 			});
 		} catch (error) {
-			throw new TRPCError({
-				code: "BAD_REQUEST",
-				message: error instanceof Error ? error.message : `Error: ${error}`,
-			});
+			throw toTRPCError(error);
 		}
 	}),
 

@@ -20,6 +20,16 @@ export function getProviderName(apiUrl: string) {
 	if (apiUrl.includes("openrouter.ai")) return "openrouter";
 	if (apiUrl.includes("api.z.ai")) return "zai";
 	if (apiUrl.includes("api.minimax.io")) return "minimax";
+	if (apiUrl.includes("nousresearch.com")) return "nous";
+	if (apiUrl.includes("api.groq.com")) return "groq";
+	if (apiUrl.includes("api.x.ai")) return "xai";
+	if (apiUrl.includes("api.deepseek.com")) return "deepseek";
+	if (apiUrl.includes("api.together.xyz")) return "together";
+	if (apiUrl.includes("api.fireworks.ai")) return "fireworks";
+	if (apiUrl.includes("api.cerebras.ai")) return "cerebras";
+	if (apiUrl.includes("api.moonshot.ai")) return "moonshot";
+	if (apiUrl.includes("models.github.ai")) return "github";
+	if (apiUrl.includes(":1234")) return "lmstudio";
 	return "custom";
 }
 
@@ -116,9 +126,19 @@ export function selectAIProvider(config: { apiUrl: string; apiKey: string }) {
 					Authorization: `Bearer ${config.apiKey}`,
 				},
 			});
+		case "nous":
+		case "groq":
+		case "xai":
+		case "deepseek":
+		case "together":
+		case "fireworks":
+		case "cerebras":
+		case "moonshot":
+		case "github":
+		case "lmstudio":
 		case "custom":
 			return createOpenAICompatible({
-				name: "custom",
+				name: providerName,
 				baseURL: config.apiUrl,
 				headers: {
 					Authorization: `Bearer ${config.apiKey}`,

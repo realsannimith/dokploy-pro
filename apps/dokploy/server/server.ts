@@ -69,7 +69,7 @@ void app.prepare().then(async () => {
 		}
 		await initEnterpriseBackupCronJobs();
 
-		const { initAgentGateways } = await import("./agent/telegram-gateway");
+		const { initAgentGateways } = await import("./agent/gateways");
 		await initAgentGateways();
 
 		if (!IS_CLOUD) {

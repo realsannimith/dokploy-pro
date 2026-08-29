@@ -1,10 +1,14 @@
 import { db } from "@dokploy/server/db";
 import {
 	agent,
+	agentChannel,
 	agentConversation,
 	agentMessage,
 } from "@dokploy/server/db/schema";
-import type { apiSaveAgent } from "@dokploy/server/db/schema/agent";
+import type {
+	apiSaveAgent,
+	apiSaveAgentChannel,
+} from "@dokploy/server/db/schema/agent";
 import { TRPCError } from "@trpc/server";
 import { and, asc, desc, eq } from "drizzle-orm";
 import type { z } from "zod";
@@ -34,13 +38,86 @@ export const findAgentById = async (agentId: string) => {
 	return result;
 };
 
-export const findAllEnabledTelegramAgents = async () => {
-	return await db.query.agent.findMany({
-		where: and(eq(agent.isEnabled, true), eq(agent.telegramEnabled, true)),
+export const findChannelsByAgentId = async (agentId: string) => {
+	return await db.query.agentChannel.findMany({
+		where: eq(agentChannel.agentId, agentId),
+		orderBy: asc(agentChannel.createdAt),
+	});
+};
+
+export const findChannelById = async (channelId: string) => {
+	const channel = await db.query.agentChannel.findFirst({
+		where: eq(agentChannel.channelId, channelId),
+	});
+	if (!channel) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Channel not found",
+		});
+	}
+	return channel;
+};
+
+export const findChannelsByType = async (
+	type: "telegram" | "discord" | "slack" | "whatsapp" | "signal" | "email",
+) => {
+	return await db.query.agentChannel.findMany({
+		where: eq(agentChannel.type, type),
+	});
+};
+
+/** Every channel that should be running, across all organizations. */
+export const findAllRunnableChannels = async () => {
+	const channels = await db.query.agentChannel.findMany({
+		where: eq(agentChannel.isEnabled, true),
 		with: {
-			ai: true,
+			agent: true,
 		},
 	});
+	return channels.filter((channel) => channel.agent.isEnabled);
+};
+
+export const saveAgentChannel = async (
+	agentId: string,
+	input: z.infer<typeof apiSaveAgentChannel>,
+) => {
+	if (input.channelId) {
+		const existing = await findChannelById(input.channelId);
+		if (existing.agentId !== agentId) {
+			throw new TRPCError({
+				code: "FORBIDDEN",
+				message: "Channel does not belong to this agent",
+			});
+		}
+		const updated = await db
+			.update(agentChannel)
+			.set({
+				type: input.type,
+				isEnabled: input.isEnabled,
+				// Merge so blanked-out secret fields keep their stored value.
+				credentials: { ...existing.credentials, ...input.credentials },
+				allowedIdentifiers: input.allowedIdentifiers,
+			})
+			.where(eq(agentChannel.channelId, input.channelId))
+			.returning();
+		return updated[0];
+	}
+	const created = await db
+		.insert(agentChannel)
+		.values({
+			agentId,
+			type: input.type,
+			isEnabled: input.isEnabled,
+			credentials: input.credentials,
+			allowedIdentifiers: input.allowedIdentifiers,
+		})
+		.returning();
+	return created[0];
+};
+
+export const deleteAgentChannel = async (channelId: string) => {
+	await db.delete(agentChannel).where(eq(agentChannel.channelId, channelId));
+	return true;
 };
 
 export const saveAgent = async (
@@ -92,9 +169,18 @@ export const findConversationById = async (conversationId: string) => {
 	return conversation;
 };
 
+export type AgentSource =
+	| "telegram"
+	| "discord"
+	| "slack"
+	| "whatsapp"
+	| "signal"
+	| "email"
+	| "web";
+
 export const findOrCreateConversation = async (input: {
 	agentId: string;
-	source: "telegram" | "web";
+	source: AgentSource;
 	externalChatId?: string;
 	conversationId?: string;
 	title?: string;
@@ -109,11 +195,11 @@ export const findOrCreateConversation = async (input: {
 		}
 		return conversation;
 	}
-	if (input.source === "telegram" && input.externalChatId) {
+	if (input.source !== "web" && input.externalChatId) {
 		const existing = await db.query.agentConversation.findFirst({
 			where: and(
 				eq(agentConversation.agentId, input.agentId),
-				eq(agentConversation.source, "telegram"),
+				eq(agentConversation.source, input.source),
 				eq(agentConversation.externalChatId, input.externalChatId),
 			),
 		});

@@ -1,4 +1,5 @@
 import type { AgentToolCall } from "@dokploy/server/db/schema/agent";
+import type { AgentSource } from "@dokploy/server/services/agent";
 import {
 	createAgentMessage,
 	findAgentById,
@@ -38,7 +39,7 @@ Current date: ${new Date().toISOString()}`;
 export interface RunAgentInput {
 	agentId: string;
 	message: string;
-	source: "telegram" | "web";
+	source: AgentSource;
 	conversationId?: string;
 	externalChatId?: string;
 }
@@ -99,7 +100,7 @@ export const runAgent = async (
 		apiUrl: agent.ai.apiUrl,
 		apiKey: agent.ai.apiKey,
 	});
-	const model = provider(agent.ai.model);
+	const model = provider(agent.model || agent.ai.model);
 
 	const result = await generateText({
 		model,

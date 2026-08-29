@@ -16,6 +16,7 @@ import { ShowEnvironment } from "@/components/dashboard/application/environment/
 import { ShowDockerLogs } from "@/components/dashboard/application/logs/show";
 import { DeleteService } from "@/components/dashboard/compose/delete-service";
 import { ShowBackups } from "@/components/dashboard/database/backups/show-backups";
+import { DatabaseIde } from "@/components/dashboard/database/database-ide";
 import { ContainerFreeMonitoring } from "@/components/dashboard/monitoring/free/container/show-free-container-monitoring";
 import { ContainerPaidMonitoring } from "@/components/dashboard/monitoring/paid/container/show-paid-container-monitoring";
 import { ShowExternalPostgresCredentials } from "@/components/dashboard/postgres/general/show-external-postgres-credentials";
@@ -50,7 +51,14 @@ import { appRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
 import { useWhitelabeling } from "@/utils/hooks/use-whitelabeling";
 
-type TabState = "projects" | "monitoring" | "settings" | "backups" | "advanced";
+type TabState =
+	| "general"
+	| "ide"
+	| "environment"
+	| "logs"
+	| "monitoring"
+	| "backups"
+	| "advanced";
 
 const Postgresql = (
 	props: InferGetServerSidePropsType<typeof getServerSideProps>,
@@ -204,10 +212,11 @@ const Postgresql = (
 										<TabsList
 											className={cn(
 												"md:grid md:w-fit max-md:overflow-y-scroll justify-start",
-												"md:grid-cols-6",
+												"md:grid-cols-7",
 											)}
 										>
 											<TabsTrigger value="general">General</TabsTrigger>
+											<TabsTrigger value="ide">IDE</TabsTrigger>
 											{permissions?.envVars.read && (
 												<TabsTrigger value="environment">
 													Environment
@@ -239,6 +248,14 @@ const Postgresql = (
 												postgresId={postgresId}
 											/>
 										</div>
+									</TabsContent>
+									<TabsContent value="ide">
+										<DatabaseIde
+											databaseId={postgresId}
+											databaseType="postgres"
+											status={data?.applicationStatus}
+											canExecute={Boolean(permissions?.service.create)}
+										/>
 									</TabsContent>
 									{permissions?.envVars.read && (
 										<TabsContent value="environment">
