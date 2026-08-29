@@ -34,6 +34,8 @@ import { audit } from "@/server/api/utils/audit";
 import {
 	fetchMonitoringData,
 	MONITORING_DATA_POINTS,
+	MONITORING_SERVICE_TYPES,
+	resolveContainerMonitoringService,
 	resolveServerMonitoringTarget,
 } from "@/server/api/utils/monitoring";
 import {
@@ -341,7 +343,13 @@ export const serverRouter = createTRPCRouter({
 			}
 		}),
 	enableMonitoring: withPermission("server", "create")
-		.input(apiFindOneServer)
+		.input(
+			apiFindOneServer.extend({
+				serviceId: z.string().min(1).optional(),
+				serviceType: z.enum(MONITORING_SERVICE_TYPES).optional(),
+				containerName: z.string().min(1).max(255).optional(),
+			}),
+		)
 		.mutation(async ({ input, ctx }) => {
 			const server = await findServerById(input.serverId);
 			if (server.organizationId !== ctx.session.activeOrganizationId) {
@@ -357,7 +365,23 @@ export const serverRouter = createTRPCRouter({
 				});
 			}
 
-			await autoConfigureMonitoring(input.serverId);
+			let serviceName: string | undefined;
+			if (input.serviceId && input.serviceType) {
+				const target = await resolveContainerMonitoringService(ctx, {
+					serviceId: input.serviceId,
+					serviceType: input.serviceType,
+					containerName: input.containerName,
+				});
+				if (target.serverId !== input.serverId) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "This service is not deployed on the selected server",
+					});
+				}
+				serviceName = target.containerName;
+			}
+
+			await autoConfigureMonitoring(input.serverId, serviceName);
 			await audit(ctx, {
 				action: "update",
 				resourceType: "server",

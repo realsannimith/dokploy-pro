@@ -112,8 +112,9 @@ export const ContainerPaidMonitoring = ({
 	const repairMonitoring = api.server.enableMonitoring.useMutation({
 		onSuccess: async () => {
 			toast.success(
-				"Monitoring restarted. Metrics should appear after the first sample.",
+				"Monitoring repaired. Collecting the first fresh sample...",
 			);
+			await new Promise((resolve) => setTimeout(resolve, 3_500));
 			await refetch();
 		},
 		onError: (error) => {
@@ -160,7 +161,14 @@ export const ContainerPaidMonitoring = ({
 							className="mt-4"
 							variant="outline"
 							disabled={repairMonitoring.isPending}
-							onClick={() => repairMonitoring.mutate({ serverId })}
+							onClick={() =>
+								repairMonitoring.mutate({
+									serverId,
+									serviceId,
+									serviceType,
+									containerName: appName,
+								})
+							}
 						>
 							<RefreshCw
 								className={repairMonitoring.isPending ? "animate-spin" : ""}

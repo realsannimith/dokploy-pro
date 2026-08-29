@@ -64,3 +64,22 @@ func TestShouldMonitorContainerUsesConfiguredServiceNames(t *testing.T) {
 		t.Fatal("an unselected service should not be monitored")
 	}
 }
+
+func TestNormalizeContainerNamePreservesTheDokployServiceName(t *testing.T) {
+	containerName := "/workspace-workspacedb-uihovc.1.n4jocg3gqq8h"
+
+	if actual := NormalizeContainerName(containerName); actual != "workspace-workspacedb-uihovc" {
+		t.Fatalf("expected stable Swarm service name, got %q", actual)
+	}
+	if actual := GetServiceName(containerName); actual != "workspace-workspacedb-uihovc" {
+		t.Fatalf("expected Swarm tasks to deduplicate by service, got %q", actual)
+	}
+}
+
+func TestNormalizeContainerNamePreservesStandaloneNames(t *testing.T) {
+	containerName := "compose-project-postgres-1"
+
+	if actual := NormalizeContainerName(containerName); actual != containerName {
+		t.Fatalf("expected standalone name to remain unchanged, got %q", actual)
+	}
+}

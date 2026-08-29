@@ -19,15 +19,18 @@ import {
 } from "@dokploy/server/services/permission";
 import { TRPCError } from "@trpc/server";
 
-export type MonitoringServiceType =
-	| "application"
-	| "compose"
-	| "postgres"
-	| "mysql"
-	| "mariadb"
-	| "mongo"
-	| "redis"
-	| "libsql";
+export const MONITORING_SERVICE_TYPES = [
+	"application",
+	"compose",
+	"postgres",
+	"mysql",
+	"mariadb",
+	"mongo",
+	"redis",
+	"libsql",
+] as const;
+
+export type MonitoringServiceType = (typeof MONITORING_SERVICE_TYPES)[number];
 
 export const MONITORING_DATA_POINTS = [
 	"50",
@@ -294,12 +297,8 @@ const findService = async (input: ResolveContainerMonitoringInput) => {
 	}
 };
 
-/**
- * Resolve a container-metrics endpoint from an authorized service. Users with
- * access to an application/database may see its metrics without receiving the
- * remote server's monitoring token or needing broad server access.
- */
-export const resolveContainerMonitoringTarget = async (
+/** Resolve the authorized container identity shared by reads and repairs. */
+export const resolveContainerMonitoringService = async (
 	ctx: PermissionCtx,
 	input: ResolveContainerMonitoringInput,
 ) => {
@@ -343,8 +342,28 @@ export const resolveContainerMonitoringTarget = async (
 		containerName = input.containerName;
 	}
 
-	if (service.serverId) {
-		const targetServer = await findServerById(service.serverId);
+	return {
+		containerName,
+		serverId: service.serverId ?? undefined,
+	};
+};
+
+/**
+ * Resolve a container-metrics endpoint from an authorized service. Users with
+ * access to an application/database may see its metrics without receiving the
+ * remote server's monitoring token or needing broad server access.
+ */
+export const resolveContainerMonitoringTarget = async (
+	ctx: PermissionCtx,
+	input: ResolveContainerMonitoringInput,
+) => {
+	const { containerName, serverId } = await resolveContainerMonitoringService(
+		ctx,
+		input,
+	);
+
+	if (serverId) {
+		const targetServer = await findServerById(serverId);
 		if (targetServer.organizationId !== ctx.session.activeOrganizationId) {
 			throw new TRPCError({
 				code: "UNAUTHORIZED",

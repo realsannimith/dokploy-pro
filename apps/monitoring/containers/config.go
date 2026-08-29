@@ -1,6 +1,7 @@
 package containers
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/mauriciogm/dokploy/apps/monitoring/config"
@@ -59,10 +60,33 @@ func matchesService(containerName string, service string) bool {
 }
 
 func GetServiceName(containerName string) string {
-	name := strings.TrimPrefix(containerName, "/")
+	name := NormalizeContainerName(containerName)
+	if name != strings.TrimPrefix(containerName, "/") {
+		return name
+	}
+
 	parts := strings.Split(name, "-")
 	if len(parts) > 1 {
 		return strings.Join(parts[:len(parts)-1], "-")
 	}
 	return name
+}
+
+// NormalizeContainerName converts a Docker Swarm task name such as
+// service-name.1.task-id back to the stable service name. Standalone and
+// Docker Compose names are preserved because the dashboard addresses those
+// containers by their complete Docker name.
+func NormalizeContainerName(containerName string) string {
+	name := strings.TrimPrefix(containerName, "/")
+	parts := strings.Split(name, ".")
+	if len(parts) < 3 {
+		return name
+	}
+
+	slot := parts[len(parts)-2]
+	if _, err := strconv.Atoi(slot); err != nil {
+		return name
+	}
+
+	return strings.Join(parts[:len(parts)-2], ".")
 }

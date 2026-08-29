@@ -92,7 +92,7 @@ const generateMetricsToken = () => {
 };
 
 type MetricsConfig = {
-	server: unknown;
+	server: object;
 	containers: {
 		refreshRate: number;
 		services: {
@@ -100,6 +100,53 @@ type MetricsConfig = {
 			exclude: string[];
 		};
 	};
+};
+
+const isMonitoringWildcard = (service: string) =>
+	service === "" || service === "*";
+
+const matchesMonitoringService = (serviceName: string, pattern: string) =>
+	isMonitoringWildcard(pattern) || serviceName.includes(pattern);
+
+/**
+ * Make the service selected from its Monitoring tab collectable without
+ * discarding the server's other monitoring choices. This also repairs the
+ * contradictory "include all, exclude all" configuration by limiting the
+ * collector to the explicitly repaired service.
+ */
+export const includeServiceInMetricsConfig = <T extends MetricsConfig>(
+	metricsConfig: T,
+	serviceName: string,
+): T => {
+	const include = [...metricsConfig.containers.services.include];
+	const exclude = [...metricsConfig.containers.services.exclude];
+	const includesAll =
+		include.length === 0 || include.some(isMonitoringWildcard);
+	const excludesAll = exclude.some(isMonitoringWildcard);
+
+	const nextInclude =
+		includesAll && excludesAll
+			? [serviceName]
+			: includesAll ||
+					include.some((pattern) =>
+						matchesMonitoringService(serviceName, pattern),
+					)
+				? include
+				: [...include, serviceName];
+	const nextExclude = exclude.filter(
+		(pattern) => !matchesMonitoringService(serviceName, pattern),
+	);
+
+	return {
+		...metricsConfig,
+		containers: {
+			...metricsConfig.containers,
+			services: {
+				include: nextInclude,
+				exclude: nextExclude,
+			},
+		},
+	} as T;
 };
 
 const encodeWildcardForLegacyAgent = (services: string[]) =>
@@ -130,20 +177,26 @@ export const prepareMetricsConfigForAgent = (metricsConfig: MetricsConfig) => ({
 // Provisions monitoring with sensible defaults so a remote server starts
 // reporting metrics without filling the setup form. An existing token is
 // preserved so re-running server setup doesn't invalidate a working agent.
-export const autoConfigureMonitoring = async (serverId: string) => {
+export const autoConfigureMonitoring = async (
+	serverId: string,
+	serviceName?: string,
+) => {
 	const server = await findServerById(serverId);
 	const baseUrl = await getDokployUrl();
 	const token = server.metricsConfig?.server?.token || generateMetricsToken();
+	const metricsConfig = serviceName
+		? includeServiceInMetricsConfig(server.metricsConfig, serviceName)
+		: server.metricsConfig;
 
 	await updateServerById(serverId, {
 		metricsConfig: {
 			server: {
-				...server.metricsConfig.server,
+				...metricsConfig.server,
 				token,
 				urlCallback: `${baseUrl}/api/trpc/notification.receiveNotification`,
-				cronJob: server.metricsConfig.server.cronJob || "0 0 * * *",
+				cronJob: metricsConfig.server.cronJob || "0 0 * * *",
 			},
-			containers: server.metricsConfig.containers,
+			containers: metricsConfig.containers,
 		},
 	});
 

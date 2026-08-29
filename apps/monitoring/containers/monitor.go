@@ -130,6 +130,7 @@ func (cm *ContainerMonitor) collectMetrics() {
 
 		// Process metrics
 		metric := processContainerMetrics(container)
+		metric.Name = NormalizeContainerName(container.Name)
 
 		// log.Printf("Saving metrics for %s: %+v", serviceName, metric)
 
