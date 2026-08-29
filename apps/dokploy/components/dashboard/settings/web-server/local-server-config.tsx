@@ -22,7 +22,13 @@ import { cn } from "@/lib/utils";
 
 const Schema = z.object({
 	port: z.number().min(1, "Port must be higher than 0"),
-	username: z.string().min(1, "Username is required"),
+	username: z
+		.string()
+		.min(1, "Username is required")
+		.regex(
+			/^[a-zA-Z_][a-zA-Z0-9_.-]{0,31}\$?$/,
+			"Enter a valid Linux username",
+		),
 });
 
 type Schema = z.infer<typeof Schema>;

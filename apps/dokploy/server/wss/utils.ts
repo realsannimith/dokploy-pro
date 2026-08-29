@@ -1,7 +1,45 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execAsync, IS_CLOUD, paths } from "@dokploy/server";
+import { docker, execAsync, IS_CLOUD, paths } from "@dokploy/server";
+
+const LOCAL_SERVER_USERNAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_.-]{0,31}\$?$/;
+
+const AUTHORIZE_LOCAL_SSH_KEY_SCRIPT = String.raw`
+set -eu
+
+passwd_entry="$(awk -F: -v target="$TARGET_USER" '$1 == target { print $6 ":" $3 ":" $4; exit }' /host/etc/passwd)"
+if [ -z "$passwd_entry" ]; then
+	echo "The configured local user does not exist on the Docker host." >&2
+	exit 2
+fi
+
+user_home="$(printf '%s' "$passwd_entry" | cut -d: -f1)"
+user_uid="$(printf '%s' "$passwd_entry" | cut -d: -f2)"
+user_gid="$(printf '%s' "$passwd_entry" | cut -d: -f3)"
+
+case "$user_home" in
+	/*) ;;
+	*) echo "The configured local user has an invalid home directory." >&2; exit 3 ;;
+esac
+case "$user_home/" in
+	*/../*) echo "The configured local user has an unsafe home directory." >&2; exit 3 ;;
+esac
+
+ssh_dir="/host$user_home/.ssh"
+authorized_keys="$ssh_dir/authorized_keys"
+public_key="$(cat /host/etc/dokploy/ssh/auto_generated-dokploy-local.pub)"
+
+mkdir -p "$ssh_dir"
+touch "$authorized_keys"
+if ! grep -qxF "$public_key" "$authorized_keys"; then
+	printf '%s\n' "$public_key" >> "$authorized_keys"
+fi
+
+chmod 700 "$ssh_dir"
+chmod 600 "$authorized_keys"
+chown "$user_uid:$user_gid" "$ssh_dir" "$authorized_keys"
+`;
 
 /**
  * Validates that the container ID matches Docker's expected format.
@@ -14,6 +52,14 @@ export const isValidContainerId = (id: string): boolean => {
 	const namePattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/;
 	return hexPattern.test(id) || (namePattern.test(id) && id.length <= 128);
 };
+
+/**
+ * Local terminal usernames are passed to SSH and to the host-key authorization
+ * helper. Keep the accepted format to normal Linux account names so the value
+ * can never become a path or command fragment.
+ */
+export const isValidLocalServerUsername = (username: string): boolean =>
+	LOCAL_SERVER_USERNAME_PATTERN.test(username);
 
 /**
  * Validates the `tail` parameter for docker logs (number of lines, max 10000).
@@ -135,4 +181,58 @@ export const setupLocalServerSSHKey = async () => {
 	const privateKey = fs.readFileSync(sshKeyPath, "utf8");
 
 	return privateKey;
+};
+
+/**
+ * Installs Dokploy's generated local-terminal public key for a host user.
+ *
+ * Dokploy runs in a container, so it cannot normally write to the Docker
+ * host's home directories. The local Docker socket is already required for
+ * Dokploy operation; use it to run a short-lived copy of the current image
+ * with the host filesystem mounted at /host. The fixed script resolves the
+ * requested user through the host's passwd file and idempotently adds the key.
+ */
+export const authorizeLocalServerSSHKey = async (username: string) => {
+	if (!isValidLocalServerUsername(username)) {
+		throw new Error("Invalid local server username");
+	}
+
+	const currentContainerId = process.env.HOSTNAME?.trim() || os.hostname();
+	const currentContainer = docker.getContainer(currentContainerId);
+	const currentContainerInfo = await currentContainer.inspect();
+	const helperContainer = await docker.createContainer({
+		Image: currentContainerInfo.Image,
+		Entrypoint: ["/bin/sh", "-c"],
+		Cmd: [AUTHORIZE_LOCAL_SSH_KEY_SCRIPT],
+		Env: [`TARGET_USER=${username}`],
+		User: "0:0",
+		Tty: true,
+		NetworkDisabled: true,
+		Labels: {
+			"com.dokploy.temporary": "local-terminal-key-authorization",
+		},
+		HostConfig: {
+			Binds: ["/:/host"],
+			NetworkMode: "none",
+			ReadonlyRootfs: true,
+		},
+	});
+
+	try {
+		await helperContainer.start();
+		const result = await helperContainer.wait();
+		if (result.StatusCode !== 0) {
+			const output = await helperContainer.logs({
+				stdout: true,
+				stderr: true,
+			});
+			const detail = output.toString("utf8").trim();
+			throw new Error(
+				detail ||
+					`Local SSH key authorization exited with code ${result.StatusCode}`,
+			);
+		}
+	} finally {
+		await helperContainer.remove({ force: true }).catch(() => undefined);
+	}
 };

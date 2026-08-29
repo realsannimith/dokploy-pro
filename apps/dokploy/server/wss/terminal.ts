@@ -11,20 +11,12 @@ import { WebSocketServer } from "ws";
 import { getDockerHost } from "../utils/docker";
 import { canAccessTerminalOverWss } from "./authorize";
 import {
+	authorizeLocalServerSSHKey,
+	isValidLocalServerUsername,
 	parseResizeMessage,
 	parseTerminalSize,
 	setupLocalServerSSHKey,
 } from "./utils";
-
-const COMMAND_TO_ALLOW_LOCAL_ACCESS = `
-# ----------------------------------------
-mkdir -p $HOME/.ssh && \\
-chmod 700 $HOME/.ssh && \\
-touch $HOME/.ssh/authorized_keys && \\
-chmod 600 $HOME/.ssh/authorized_keys && \\
-cat /etc/dokploy/ssh/auto_generated-dokploy-local.pub >> $HOME/.ssh/authorized_keys && \\
-echo "✓ Dokploy SSH key added successfully. Reopen the terminal in Dokploy to reconnect."
-# ----------------------------------------`;
 
 const COMMAND_TO_GRANT_PERMISSION_ACCESS = `
 # ----------------------------------------
@@ -120,7 +112,8 @@ export const setupTerminalWebSocketServer = (
 			const port = Number(url.searchParams.get("port"));
 			const username = url.searchParams.get("username");
 
-			if (!port || !username) {
+			if (!port || !username || !isValidLocalServerUsername(username)) {
+				ws.send("Invalid local terminal connection settings.\n");
 				ws.close();
 				return;
 			}
@@ -133,6 +126,9 @@ export const setupTerminalWebSocketServer = (
 					ws.close();
 					return;
 				}
+
+				ws.send("Authorizing local SSH access...\n");
+				await authorizeLocalServerSSHKey(username);
 
 				const dockerHost = await getDockerHost();
 
@@ -247,7 +243,7 @@ export const setupTerminalWebSocketServer = (
 				if (err.level === "client-authentication") {
 					if (isLocalServer) {
 						ws.send(
-							`Authentication failed: Please run the command below on your server to allow access. Make sure to run it as the same user as the one configured in connection settings:${COMMAND_TO_ALLOW_LOCAL_ACCESS}\nAfter running the command, reopen this window to reconnect. This procedure is required only once.`,
+							"Authentication failed after Dokploy authorized its SSH key. Check that the configured username is allowed to sign in with public-key authentication and that the SSH port is correct.\n",
 						);
 					} else {
 						ws.send(

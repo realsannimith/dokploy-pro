@@ -1,10 +1,29 @@
 import { describe, expect, it } from "vitest";
 import {
 	isValidContainerId,
+	isValidLocalServerUsername,
 	isValidSearch,
 	isValidSince,
 	isValidTail,
 } from "../../server/wss/utils";
+
+describe("isValidLocalServerUsername (local terminal)", () => {
+	it("accepts normal Linux account names", () => {
+		expect(isValidLocalServerUsername("root")).toBe(true);
+		expect(isValidLocalServerUsername("deploy-user")).toBe(true);
+		expect(isValidLocalServerUsername("ubuntu_24")).toBe(true);
+		expect(isValidLocalServerUsername("svc.dokploy")).toBe(true);
+	});
+
+	it("rejects paths, shell fragments, and malformed account names", () => {
+		expect(isValidLocalServerUsername("")).toBe(false);
+		expect(isValidLocalServerUsername("../../root")).toBe(false);
+		expect(isValidLocalServerUsername("root; id")).toBe(false);
+		expect(isValidLocalServerUsername("$(whoami)")).toBe(false);
+		expect(isValidLocalServerUsername("-root")).toBe(false);
+		expect(isValidLocalServerUsername("a".repeat(33))).toBe(false);
+	});
+});
 
 describe("isValidTail (docker-container-logs)", () => {
 	it("accepts valid numeric tail values", () => {
