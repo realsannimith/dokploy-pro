@@ -3,7 +3,10 @@ import {
 	findServerById,
 	updateServerById,
 } from "@dokploy/server/services/server";
-import { getWebServerSettings } from "@dokploy/server/services/web-server-settings";
+import {
+	getWebServerSettings,
+	updateWebServerSettings,
+} from "@dokploy/server/services/web-server-settings";
 import type { CreateServiceOptions } from "dockerode";
 import { IS_CLOUD } from "../constants";
 import { getDokployImage, getDokployImageTag } from "../services/settings";
@@ -149,6 +152,95 @@ export const includeServiceInMetricsConfig = <T extends MetricsConfig>(
 	} as T;
 };
 
+export type ServiceMonitoringState = "collected" | "excluded" | "missing";
+
+export const getServiceMonitoringState = (
+	metricsConfig: MetricsConfig | null | undefined,
+	serviceName: string,
+): ServiceMonitoringState => {
+	const services = metricsConfig?.containers?.services;
+	const include = services?.include ?? [];
+	const exclude = services?.exclude ?? [];
+	if (
+		exclude.some((pattern) => matchesMonitoringService(serviceName, pattern))
+	) {
+		return "excluded";
+	}
+	if (
+		include.length === 0 ||
+		include.some((pattern) => matchesMonitoringService(serviceName, pattern))
+	) {
+		return "collected";
+	}
+	return "missing";
+};
+
+export type EnsureServiceMonitoringResult =
+	| ServiceMonitoringState
+	| "included"
+	| "configured"
+	| "skipped"
+	| "error";
+
+/**
+ * Deploy-time hook that keeps per-service monitoring in sync: provisions the
+ * agent on remote servers that never got one and re-adds services that a
+ * narrowed include list would silently drop. Explicit excludes are an
+ * administrator's choice and are respected, and failures only warn because
+ * monitoring must never break a deployment.
+ */
+export const ensureServiceMonitoring = async (
+	appName: string,
+	serverId?: string | null,
+	log?: (message: string) => void,
+): Promise<EnsureServiceMonitoringResult> => {
+	try {
+		if (!serverId) {
+			if (IS_CLOUD) return "skipped";
+			const settings = await getWebServerSettings();
+			const metricsConfig = settings?.metricsConfig;
+			// Local monitoring stays opt-in; only fix the filters once enabled.
+			if (!metricsConfig?.server?.token) return "skipped";
+			const state = getServiceMonitoringState(metricsConfig, appName);
+			if (state !== "missing") return state;
+			log?.(`Adding "${appName}" to the monitoring configuration...`);
+			await updateWebServerSettings({
+				metricsConfig: includeServiceInMetricsConfig(metricsConfig, appName),
+			});
+			await setupWebMonitoring();
+			return "included";
+		}
+
+		const server = await findServerById(serverId);
+		if (server.serverType !== "deploy") return "skipped";
+		if (!server.metricsConfig?.server?.token) {
+			log?.("Monitoring is not configured on this server. Setting it up...");
+			await autoConfigureMonitoring(serverId, appName);
+			return "configured";
+		}
+		const state = getServiceMonitoringState(server.metricsConfig, appName);
+		if (state !== "missing") return state;
+		log?.(`Adding "${appName}" to the monitoring configuration...`);
+		await updateServerById(serverId, {
+			metricsConfig: includeServiceInMetricsConfig(
+				server.metricsConfig,
+				appName,
+			),
+		});
+		await setupMonitoring(serverId);
+		return "included";
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		console.warn(
+			`Monitoring auto-configuration for "${appName}" failed: ${message}`,
+		);
+		log?.(
+			`Monitoring auto-configuration failed (the deployment is not affected): ${message}`,
+		);
+		return "error";
+	}
+};
+
 const encodeWildcardForLegacyAgent = (services: string[]) =>
 	services.map((service) => (service === "*" ? "" : service));
 
@@ -276,9 +368,16 @@ export const setupWebMonitoring = async () => {
 	const serviceName = "dokploy-monitoring";
 	const imageName = getMonitoringImage();
 	const port = webServerSettings?.metricsConfig?.server?.port;
-	const metricsConfig = webServerSettings?.metricsConfig
-		? prepareMetricsConfigForAgent(webServerSettings.metricsConfig)
-		: undefined;
+	// Without a token + callback the agent exits fatally on boot, so a deploy
+	// here would only produce a crash-looping service.
+	if (!webServerSettings?.metricsConfig?.server?.token || !port) {
+		throw new Error(
+			"Monitoring is not configured yet. Save the monitoring settings first.",
+		);
+	}
+	const metricsConfig = prepareMetricsConfigForAgent(
+		webServerSettings.metricsConfig,
+	);
 
 	const settings: CreateServiceOptions = {
 		Name: serviceName,

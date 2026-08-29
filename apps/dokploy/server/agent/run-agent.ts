@@ -17,8 +17,11 @@ import { type AgentConfirmationHandler, buildAgentTools } from "./tools";
 const HISTORY_LIMIT = 30;
 const MAX_STEPS = 15;
 
+const TELEGRAM_FORMAT_NOTE = `\n\nFormatting for this chat: Telegram renders only a small markdown subset. Use *bold*, _italic_, \`inline code\`, fenced code blocks, [links](https://example.com) and "-" bullet lists, and nothing else. Never use markdown headings, tables, images or nested lists.`;
+
 const buildSystemPrompt = (
 	agentName: string,
+	source: AgentSource,
 	instructions?: string | null,
 	hasConfirmationButtons?: boolean,
 	skillIndex?: string,
@@ -52,14 +55,16 @@ ${memoryIndex || "(No durable memories yet.)"}
 
 Current date: ${new Date().toISOString()}`;
 
+	const formatNote = source === "telegram" ? TELEGRAM_FORMAT_NOTE : "";
+
 	const confirmationNote = hasConfirmationButtons
 		? `\n\nSome sensitive tools do not run immediately: calling them sends the user an Approve/Reject button prompt in this chat. When a tool responds that a confirmation request was sent, stop and briefly tell the user what will happen once they tap Approve. Never call the same tool again to "retry" while a confirmation is pending.`
 		: "";
 
 	if (instructions?.trim()) {
-		return `${base}${confirmationNote}\n\nAdditional instructions from the administrator:\n${instructions.trim()}`;
+		return `${base}${formatNote}${confirmationNote}\n\nAdditional instructions from the administrator:\n${instructions.trim()}`;
 	}
-	return `${base}${confirmationNote}`;
+	return `${base}${formatNote}${confirmationNote}`;
 };
 
 export interface RunAgentInput {
@@ -155,6 +160,7 @@ export const runAgent = async (
 		model,
 		system: buildSystemPrompt(
 			agent.name,
+			input.source,
 			agent.instructions,
 			!!input.confirmation,
 			formatSkillIndex(skills),

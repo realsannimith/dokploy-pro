@@ -39,7 +39,7 @@ func (cm *ContainerMonitor) Start() error {
 
 	metricsConfig := config.GetMetricsConfig()
 	refreshRate := metricsConfig.Containers.RefreshRate
-	if refreshRate == 0 {
+	if refreshRate <= 0 {
 		refreshRate = 60 // default refresh rate
 	}
 	duration := time.Duration(refreshRate) * time.Second

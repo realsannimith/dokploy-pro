@@ -9,7 +9,6 @@ import {
 	apiSaveAgentMemory,
 	apiSaveAgentSkill,
 } from "@dokploy/server/db/schema/agent";
-import { generateAppName } from "@dokploy/server/db/schema/utils";
 import {
 	deleteAgentMemory,
 	findAgentMemories,
@@ -21,6 +20,7 @@ import {
 } from "@dokploy/server/services/agent";
 import { type Tool, tool } from "ai";
 import { z } from "zod";
+import { slugify } from "@/lib/slug";
 import type { AgentCaller } from "./caller";
 
 export type AgentToolGroup = "Read" | "Operate" | "Create" | "Destructive";
@@ -469,6 +469,9 @@ export const buildAgentTools = (
 					const matches = [...getMcpTools().values()]
 						.filter((definition) => isMcpToolAllowed(definition, policy))
 						.filter(
+							(definition) => !definition.procedurePath.startsWith("agent."),
+						)
+						.filter(
 							(definition) =>
 								!router || definition.procedurePath.startsWith(`${router}.`),
 						)
@@ -514,10 +517,17 @@ export const buildAgentTools = (
 							`The tool ${name} is blocked by the administrator's MCP access policy.`,
 						);
 					}
-					if (definition.procedurePath === "agent.chat") {
-						return toResult("Refused recursive agent.chat invocation.");
+					if (definition.procedurePath.startsWith("agent.")) {
+						return toResult(
+							"Refused: the agent cannot call or reconfigure itself through the tool catalog.",
+						);
 					}
-					if (definition.type === "mutation" && options.confirmation) {
+					if (definition.type === "mutation") {
+						if (!options.confirmation) {
+							return toResult(
+								`${definition.procedurePath} is a mutation and requires user approval, which this chat surface cannot collect. Use a focused built-in tool instead, or ask the user to run it from the dashboard or a connected channel.`,
+							);
+						}
 						const shownArgs = JSON.stringify(args);
 						return await options.confirmation.request({
 							toolName: "callDokployTool",
@@ -1196,7 +1206,9 @@ export const buildAgentTools = (
 			execute: async (input) => {
 				try {
 					const { databaseType, environmentId, name } = input;
-					const appName = generateAppName(databaseType);
+					// The service layer appends its own random suffix, so only a
+					// human-readable base goes in - same as the dashboard forms.
+					const appName = slugify(name).slice(0, 56);
 					const dockerImage =
 						input.dockerImage || DEFAULT_DB_IMAGES[databaseType];
 					const databasePassword = input.databasePassword || generatePassword();
@@ -1206,14 +1218,14 @@ export const buildAgentTools = (
 							: input.databaseUser || DEFAULT_DB_USERS[databaseType];
 					const databaseName =
 						input.databaseName ||
-						(databaseType === "postgres"
-							? "postgres"
-							: databaseType === "mysql"
-								? "mysql"
-								: "mariadb");
+						(databaseType === "postgres" ||
+						databaseType === "mysql" ||
+						databaseType === "mariadb"
+							? DEFAULT_DB_USERS[databaseType]
+							: undefined);
 					const common = {
 						name,
-						appName,
+						...(appName ? { appName } : {}),
 						dockerImage,
 						environmentId,
 						description: input.description ?? "",
@@ -1327,7 +1339,7 @@ export const buildAgentTools = (
 		}),
 		createApplication: tool({
 			description:
-				"Create a new (empty) application service in an environment. The git/docker source must then be configured in the dashboard before it can deploy.",
+				"Create a new application service in an environment. Pass dockerImage to make it deployable right away; otherwise the git/docker source must be configured in the dashboard before it can deploy.",
 			inputSchema: z.object({
 				environmentId: z.string(),
 				name: z.string().min(1),
@@ -1337,22 +1349,47 @@ export const buildAgentTools = (
 					.describe(
 						"Deploy on this remote server (see listServers). Omit to run on the Dokploy host.",
 					),
+				dockerImage: z
+					.string()
+					.optional()
+					.describe(
+						'Public Docker image to run, e.g. "nginx:alpine". Private registries must be configured in the dashboard.',
+					),
 				description: z.string().optional(),
 			}),
-			execute: async ({ environmentId, name, serverId, description }) => {
+			execute: async ({
+				environmentId,
+				name,
+				serverId,
+				dockerImage,
+				description,
+			}) => {
 				try {
+					const appName = slugify(name).slice(0, 56);
 					const created = (await caller.application.create({
 						name,
-						appName: generateAppName("app"),
+						...(appName ? { appName } : {}),
 						environmentId,
 						serverId: serverId || null,
 						description: description ?? "",
 					} as any)) as any;
+					if (dockerImage && created?.applicationId) {
+						await caller.application.saveDockerProvider({
+							applicationId: created.applicationId,
+							dockerImage,
+							username: null,
+							password: null,
+							registryUrl: null,
+						} as any);
+					}
 					return toResult({
 						serviceType: "application",
 						serviceId: created?.applicationId,
 						...pick(created, ["name", "appName"]),
-						next: "Configure its source (git provider or docker image) in the dashboard, then deploy.",
+						...(dockerImage ? { dockerImage } : {}),
+						next: dockerImage
+							? "The docker image is configured. Call deployService to start it."
+							: "Configure its source (git provider or docker image) in the dashboard, then deploy.",
 					});
 				} catch (error) {
 					return toErrorResult(error);
@@ -1489,6 +1526,16 @@ export const buildAgentTools = (
 						summary: summarizeToolCall(name, input),
 						toolInput: input,
 					}),
+			};
+		} else if (setting.confirm) {
+			// Never silently drop the approval requirement on surfaces that
+			// cannot collect one (e.g. the dashboard chat).
+			tools[name] = {
+				...toolDef,
+				execute: async () =>
+					toResult(
+						`${name} requires user approval, which this chat surface cannot collect. Ask the user to do it from the dashboard, or from a connected channel where approvals work.`,
+					),
 			};
 		} else {
 			tools[name] = toolDef;

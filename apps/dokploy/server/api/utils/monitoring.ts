@@ -11,6 +11,7 @@ import {
 	findServerById,
 	getAccessibleServerIds,
 	getContainersByAppNameMatch,
+	getServiceMonitoringState,
 	getWebServerSettings,
 } from "@dokploy/server";
 import {
@@ -386,6 +387,10 @@ export const resolveContainerMonitoringTarget = async (
 			token: metrics.token,
 			containerName,
 			serverId: targetServer.serverId,
+			collectionState: getServiceMonitoringState(
+				targetServer.metricsConfig,
+				containerName,
+			),
 		};
 	}
 
@@ -402,5 +407,9 @@ export const resolveContainerMonitoringTarget = async (
 		url: monitoringUrl(settings.serverIp, metrics.port, "/metrics/containers"),
 		token: metrics.token,
 		containerName,
+		collectionState: getServiceMonitoringState(
+			settings.metricsConfig,
+			containerName,
+		),
 	};
 };

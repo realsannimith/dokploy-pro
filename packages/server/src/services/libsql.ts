@@ -5,6 +5,7 @@ import {
 	buildAppName,
 	libsql,
 } from "@dokploy/server/db/schema";
+import { ensureServiceMonitoring } from "@dokploy/server/setup/monitoring-setup";
 import { generatePassword } from "@dokploy/server/templates";
 import { buildLibsql } from "@dokploy/server/utils/databases/libsql";
 import { waitForDatabaseServiceRunning } from "@dokploy/server/utils/databases/readiness";
@@ -155,6 +156,7 @@ export const deployLibsql = async (
 		await updateLibsqlById(libsqlId, {
 			applicationStatus: "done",
 		});
+		await ensureServiceMonitoring(libsql.appName, libsql.serverId, onData);
 		onData?.("Deployment completed successfully!");
 	} catch (error) {
 		onData?.(`Error: ${error}`);

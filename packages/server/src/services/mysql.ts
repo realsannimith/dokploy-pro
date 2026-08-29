@@ -5,6 +5,7 @@ import {
 	buildAppName,
 	mysql,
 } from "@dokploy/server/db/schema";
+import { ensureServiceMonitoring } from "@dokploy/server/setup/monitoring-setup";
 import { generatePassword } from "@dokploy/server/templates";
 import { buildMysql } from "@dokploy/server/utils/databases/mysql";
 import { waitForDatabaseServiceRunning } from "@dokploy/server/utils/databases/readiness";
@@ -158,6 +159,7 @@ export const deployMySql = async (
 		await updateMySqlById(mysqlId, {
 			applicationStatus: "done",
 		});
+		await ensureServiceMonitoring(mysql.appName, mysql.serverId, onData);
 		onData?.("Deployment completed successfully!");
 	} catch (error) {
 		onData?.(`Error: ${error}`);

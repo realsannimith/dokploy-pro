@@ -116,7 +116,7 @@ export const ComposePaidMonitoring = ({
 							onClick={async () => {
 								if (!containerId) return;
 								toast.success(`Restarting container ${containerAppName}`);
-								await restart({ containerId }).then(() => {
+								await restart({ containerId, serverId }).then(() => {
 									toast.success("Container restarted");
 								});
 							}}

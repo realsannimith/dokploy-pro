@@ -4,6 +4,7 @@ import {
 	buildAppName,
 	redis,
 } from "@dokploy/server/db/schema";
+import { ensureServiceMonitoring } from "@dokploy/server/setup/monitoring-setup";
 import { generatePassword } from "@dokploy/server/templates";
 import { waitForDatabaseServiceRunning } from "@dokploy/server/utils/databases/readiness";
 import { buildRedis } from "@dokploy/server/utils/databases/redis";
@@ -125,6 +126,7 @@ export const deployRedis = async (
 		await updateRedisById(redisId, {
 			applicationStatus: "done",
 		});
+		await ensureServiceMonitoring(redis.appName, redis.serverId, onData);
 		onData?.("Deployment completed successfully!");
 	} catch (error) {
 		onData?.(`Error: ${error}`);

@@ -106,8 +106,7 @@ const Dashboard = () => {
 	const remoteServer = servers?.find((s) => s.serverId === selectedServer);
 
 	const isDokployMonitoringEnabled =
-		Boolean(DEV_METRICS_URL) ||
-		Boolean(monitoring?.metricsConfig?.server?.token);
+		Boolean(DEV_METRICS_URL) || Boolean(monitoring?.monitoringEnabled);
 
 	// The local terminal is owner/admin-only server-side; remote terminals
 	// follow the accessible-servers check the targets query already applies.

@@ -109,6 +109,11 @@ func main() {
 			return c.JSON([]database.ContainerMetric{})
 		}
 
+		// Stack-compose lookups arrive as full Swarm task names while metrics
+		// are stored under the normalized service name; the query's LIKE
+		// prefix still covers rows written by older agents.
+		appName = containers.NormalizeContainerName(appName)
+
 		var metrics []database.ContainerMetric
 		var err error
 
@@ -133,6 +138,11 @@ func main() {
 
 	go func() {
 		refreshRate := cfg.Server.RefreshRate
+		// time.NewTicker panics on a non-positive interval, which would
+		// crash-loop the whole agent over one missing config field.
+		if refreshRate <= 0 {
+			refreshRate = 60
+		}
 		duration := time.Duration(refreshRate) * time.Second
 
 		log.Printf("Refreshing server metrics every %v", duration)

@@ -6,6 +6,7 @@ import {
 	compose,
 	mongo,
 } from "@dokploy/server/db/schema";
+import { ensureServiceMonitoring } from "@dokploy/server/setup/monitoring-setup";
 import { generatePassword } from "@dokploy/server/templates";
 import { buildMongo } from "@dokploy/server/utils/databases/mongo";
 import { waitForDatabaseServiceRunning } from "@dokploy/server/utils/databases/readiness";
@@ -175,6 +176,7 @@ export const deployMongo = async (
 		await updateMongoById(mongoId, {
 			applicationStatus: "done",
 		});
+		await ensureServiceMonitoring(mongo.appName, mongo.serverId, onData);
 		onData?.("Deployment completed successfully!");
 	} catch (error) {
 		onData?.(`Error: ${error}`);

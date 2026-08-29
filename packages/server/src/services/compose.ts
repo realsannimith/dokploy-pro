@@ -7,6 +7,7 @@ import {
 	cleanAppName,
 	compose,
 } from "@dokploy/server/db/schema";
+import { ensureServiceMonitoring } from "@dokploy/server/setup/monitoring-setup";
 import { getBuildComposeCommand } from "@dokploy/server/utils/builders/compose";
 import { randomizeSpecificationFile } from "@dokploy/server/utils/docker/compose";
 import {
@@ -285,6 +286,7 @@ export const deployCompose = async ({
 		await updateCompose(composeId, {
 			composeStatus: "done",
 		});
+		await ensureServiceMonitoring(compose.appName, compose.serverId);
 
 		await sendBuildSuccessNotifications({
 			projectName: compose.environment.project.name,
@@ -319,7 +321,7 @@ export const deployCompose = async ({
 			projectName: compose.environment.project.name,
 			applicationName: compose.name,
 			applicationType: "compose",
-			// @ts-ignore
+			// @ts-expect-error
 			errorMessage: error?.message || "Error building",
 			buildLink,
 			organizationId: compose.environment.project.organizationId,
@@ -399,6 +401,7 @@ export const rebuildCompose = async ({
 		await updateCompose(composeId, {
 			composeStatus: "done",
 		});
+		await ensureServiceMonitoring(compose.appName, compose.serverId);
 	} catch (error) {
 		let command = "";
 

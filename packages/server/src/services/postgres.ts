@@ -5,6 +5,7 @@ import {
 	buildAppName,
 	postgres,
 } from "@dokploy/server/db/schema";
+import { ensureServiceMonitoring } from "@dokploy/server/setup/monitoring-setup";
 import { generatePassword } from "@dokploy/server/templates";
 import { buildPostgres } from "@dokploy/server/utils/databases/postgres";
 import { waitForDatabaseServiceRunning } from "@dokploy/server/utils/databases/readiness";
@@ -171,6 +172,7 @@ export const deployPostgres = async (
 		await updatePostgresById(postgresId, {
 			applicationStatus: "done",
 		});
+		await ensureServiceMonitoring(postgres.appName, postgres.serverId, onData);
 
 		onData?.("Deployment completed successfully!");
 	} catch (error) {

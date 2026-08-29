@@ -387,10 +387,18 @@ export const userRouter = createTRPCRouter({
 		async ({ ctx }) => {
 			const user = await findUserById(ctx.user.ownerId);
 			const settings = await getWebServerSettings();
+			// Metrics are proxied server-side, so the browser only needs to know
+			// whether monitoring is configured - never the bearer token itself.
 			return {
 				serverIp: settings?.serverIp,
 				enabledFeatures: user.enablePaidFeatures,
-				metricsConfig: settings?.metricsConfig,
+				monitoringEnabled: Boolean(settings?.metricsConfig?.server?.token),
+				metricsConfig: settings?.metricsConfig
+					? {
+							...settings.metricsConfig,
+							server: { ...settings.metricsConfig.server, token: "" },
+						}
+					: settings?.metricsConfig,
 			};
 		},
 	),
@@ -558,13 +566,26 @@ export const userRouter = createTRPCRouter({
 					appName: target.containerName,
 				});
 				if (!Array.isArray(data) || data.length === 0) {
+					const hints =
+						target.collectionState === "excluded"
+							? [
+									`1. "${target.containerName}" matches the monitoring exclude list of this server`,
+									'2. Remove it from the exclude list, or press "Repair monitoring" to collect it again',
+								]
+							: target.collectionState === "missing"
+								? [
+										`1. "${target.containerName}" is not in the monitoring include list of this server`,
+										'2. Press "Repair monitoring" to add it - redeploying the service also adds it automatically',
+									]
+								: [
+										"1. The container was recently started - wait a few minutes for data to be collected",
+										"2. The container is not running - verify its status",
+									];
 					throw new Error(
 						[
 							`No monitoring data is available for "${target.containerName}" yet.`,
 							"",
-							"1. The container was recently started - wait a few minutes for data to be collected",
-							"2. The container is not running - verify its status",
-							"3. The service is not included in your monitoring configuration",
+							...hints,
 						].join("\n"),
 					);
 				}

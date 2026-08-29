@@ -5,6 +5,7 @@ import {
 	buildAppName,
 	mariadb,
 } from "@dokploy/server/db/schema";
+import { ensureServiceMonitoring } from "@dokploy/server/setup/monitoring-setup";
 import { generatePassword } from "@dokploy/server/templates";
 import { buildMariadb } from "@dokploy/server/utils/databases/mariadb";
 import { waitForDatabaseServiceRunning } from "@dokploy/server/utils/databases/readiness";
@@ -160,6 +161,7 @@ export const deployMariadb = async (
 		await updateMariadbById(mariadbId, {
 			applicationStatus: "done",
 		});
+		await ensureServiceMonitoring(mariadb.appName, mariadb.serverId, onData);
 		onData?.("Deployment completed successfully!");
 	} catch (error) {
 		onData?.(`Error: ${error}`);

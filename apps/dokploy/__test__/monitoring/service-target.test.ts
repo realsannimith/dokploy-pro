@@ -18,6 +18,21 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@dokploy/server", () => ({
 	execAsyncRemote: mocks.execAsyncRemote,
+	getServiceMonitoringState: (
+		metricsConfig: {
+			containers?: { services?: { include?: string[]; exclude?: string[] } };
+		},
+		serviceName: string,
+	) => {
+		const services = metricsConfig?.containers?.services;
+		const matches = (pattern: string) =>
+			pattern === "" || pattern === "*" || serviceName.includes(pattern);
+		if (services?.exclude?.some(matches)) return "excluded";
+		if (!services?.include?.length || services.include.some(matches)) {
+			return "collected";
+		}
+		return "missing";
+	},
 	findApplicationById: mocks.findApplicationById,
 	findComposeById: mocks.findComposeById,
 	findLibsqlById: mocks.findLibsqlById,
@@ -81,6 +96,7 @@ describe("service-scoped remote monitoring", () => {
 			token: "server-secret",
 			containerName: "app-api-123",
 			serverId: "server-1",
+			collectionState: "collected",
 		});
 		expect(mocks.checkServiceAccess).toHaveBeenCalledWith(ctx, "app-1", "read");
 	});

@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Textarea } from "@/components/ui/textarea";
 import type { RouterOutputs } from "@/utils/api";
 
@@ -173,10 +172,10 @@ export const DatabaseRowEditor = ({
 				if (!isSaving) onOpenChange(nextOpen);
 			}}
 		>
-			<DialogContent className="max-h-[88vh] gap-0 overflow-hidden p-0 sm:max-w-2xl">
-				<DialogHeader className="border-b px-6 py-5 pr-12">
+			<DialogContent className="grid h-[calc(100dvh-1rem)] max-h-[52rem] w-[calc(100vw-1rem)] max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0 sm:h-[min(88dvh,52rem)] sm:max-w-2xl [&>button]:top-3 [&>button]:right-3 [&>button]:size-11">
+				<DialogHeader className="min-w-0 border-b px-4 py-4 pr-16 sm:px-6 sm:py-5 sm:pr-16">
 					<div className="flex items-center gap-2">
-						<div className="rounded-lg border bg-muted/40 p-2">
+						<div className="shrink-0 rounded-lg border bg-muted/40 p-2">
 							<Pencil className="size-4 text-primary" />
 						</div>
 						<div className="min-w-0">
@@ -186,14 +185,14 @@ export const DatabaseRowEditor = ({
 							</p>
 						</div>
 					</div>
-					<DialogDescription>
+					<DialogDescription className="max-w-prose leading-5">
 						Only changed values are saved. Primary keys identify the exact row
 						and cannot be changed here.
 					</DialogDescription>
 				</DialogHeader>
 
-				<ScrollArea className="min-h-0 flex-1">
-					<div className="space-y-4 px-6 py-5">
+				<div className="min-h-0 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]">
+					<div className="space-y-3 p-4 pb-6 sm:space-y-4 sm:px-6 sm:py-5">
 						{table?.columns.map((column, index) => {
 							const fieldId = `database-row-field-${index}`;
 							const currentDraft = draft[column.name] ?? {
@@ -208,13 +207,19 @@ export const DatabaseRowEditor = ({
 							return (
 								<div
 									key={column.name}
-									className="rounded-lg border bg-background p-3"
+									className="min-w-0 rounded-lg border bg-background p-3 sm:p-4"
 								>
 									<div className="mb-2 flex min-w-0 flex-wrap items-center gap-2">
 										<Label htmlFor={fieldId} className="min-w-0 font-mono">
-											<span className="truncate">{column.name}</span>
+											<span className="min-w-0 break-all sm:truncate">
+												{column.name}
+											</span>
 										</Label>
-										<Badge variant="outline" className="font-mono font-normal">
+										<Badge
+											variant="outline"
+											className="max-w-full truncate font-mono font-normal"
+											title={column.dataType}
+										>
 											{column.dataType}
 										</Badge>
 										{column.primaryKey && (
@@ -230,7 +235,7 @@ export const DatabaseRowEditor = ({
 									</div>
 
 									{booleanValue ? (
-										<div className="flex h-10 items-center gap-2 rounded-lg border px-3">
+										<div className="flex h-11 items-center gap-2 rounded-lg border px-3 sm:h-10">
 											<Checkbox
 												id={fieldId}
 												checked={Boolean(currentDraft.value)}
@@ -254,7 +259,7 @@ export const DatabaseRowEditor = ({
 											id={fieldId}
 											value={String(currentDraft.value)}
 											disabled={locked || currentDraft.isNull}
-											className="min-h-24 font-mono text-xs"
+											className="min-h-24 font-mono text-base sm:text-sm"
 											onChange={(event) =>
 												setDraft((current) => ({
 													...current,
@@ -276,7 +281,7 @@ export const DatabaseRowEditor = ({
 											step="any"
 											value={String(currentDraft.value)}
 											disabled={locked || currentDraft.isNull}
-											className="font-mono text-xs"
+											className="h-11 font-mono text-base sm:h-10 sm:text-sm"
 											onChange={(event) =>
 												setDraft((current) => ({
 													...current,
@@ -316,13 +321,14 @@ export const DatabaseRowEditor = ({
 							);
 						})}
 					</div>
-				</ScrollArea>
+				</div>
 
-				<DialogFooter className="border-t bg-muted/20 px-6 py-4">
+				<DialogFooter className="relative z-10 border-t bg-popover px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-4">
 					<Button
 						variant="outline"
 						onClick={() => onOpenChange(false)}
 						disabled={isSaving}
+						className="h-11 w-full sm:h-10 sm:w-auto"
 					>
 						Cancel
 					</Button>
@@ -330,6 +336,7 @@ export const DatabaseRowEditor = ({
 						onClick={save}
 						disabled={changedColumnNames.length === 0}
 						isLoading={isSaving}
+						className="h-11 w-full sm:h-10 sm:w-auto"
 					>
 						{changedColumnNames.length > 0
 							? `Save ${changedColumnNames.length} change${

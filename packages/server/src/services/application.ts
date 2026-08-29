@@ -6,6 +6,7 @@ import {
 	buildAppName,
 } from "@dokploy/server/db/schema";
 import { getAdvancedStats } from "@dokploy/server/monitoring/utils";
+import { ensureServiceMonitoring } from "@dokploy/server/setup/monitoring-setup";
 import {
 	getBuildCommand,
 	mechanizeDockerContainer,
@@ -234,6 +235,7 @@ export const deployApplication = async ({
 		await mechanizeDockerContainer(application);
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateApplicationStatus(applicationId, "done");
+		await ensureServiceMonitoring(application.appName, application.serverId);
 
 		await sendBuildSuccessNotifications({
 			projectName: application.environment.project.name,
@@ -267,7 +269,7 @@ export const deployApplication = async ({
 			projectName: application.environment.project.name,
 			applicationName: application.name,
 			applicationType: "application",
-			// @ts-ignore
+			// @ts-expect-error
 			errorMessage: error?.message || "Error building",
 			buildLink,
 			organizationId: application.environment.project.organizationId,
@@ -325,6 +327,7 @@ export const rebuildApplication = async ({
 		await mechanizeDockerContainer(application);
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateApplicationStatus(applicationId, "done");
+		await ensureServiceMonitoring(application.appName, application.serverId);
 
 		await sendBuildSuccessNotifications({
 			projectName: application.environment.project.name,

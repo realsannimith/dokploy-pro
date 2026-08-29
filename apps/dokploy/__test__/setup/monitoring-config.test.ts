@@ -1,5 +1,6 @@
 import {
 	getMonitoringImage,
+	getServiceMonitoringState,
 	includeServiceInMetricsConfig,
 	prepareMetricsConfigForAgent,
 } from "@dokploy/server/setup/monitoring-setup";
@@ -82,6 +83,48 @@ describe("includeServiceInMetricsConfig", () => {
 			"workspace-workspacedb-uihovc",
 		]);
 		expect(result.containers.services.exclude).toEqual([]);
+	});
+});
+
+describe("getServiceMonitoringState", () => {
+	it("treats an empty include list as collecting everything", () => {
+		expect(getServiceMonitoringState(createConfig([]), "app-x-123")).toBe(
+			"collected",
+		);
+	});
+
+	it("reports services outside an explicit include list as missing", () => {
+		expect(
+			getServiceMonitoringState(createConfig(["other-app"]), "app-x-123"),
+		).toBe("missing");
+	});
+
+	it("matches include patterns as substrings and wildcards", () => {
+		expect(
+			getServiceMonitoringState(createConfig(["app-x"]), "app-x-123"),
+		).toBe("collected");
+		expect(getServiceMonitoringState(createConfig(["*"]), "app-x-123")).toBe(
+			"collected",
+		);
+	});
+
+	it("prefers an explicit exclude over any include", () => {
+		expect(
+			getServiceMonitoringState(
+				createConfig(["app-x"], ["app-x-123"]),
+				"app-x-123",
+			),
+		).toBe("excluded");
+	});
+
+	it("tolerates a partially populated config", () => {
+		expect(getServiceMonitoringState(undefined, "app-x-123")).toBe("collected");
+		expect(
+			getServiceMonitoringState(
+				{ server: {}, containers: {} } as never,
+				"app-x-123",
+			),
+		).toBe("collected");
 	});
 });
 

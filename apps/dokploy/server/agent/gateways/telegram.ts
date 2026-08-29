@@ -1,5 +1,10 @@
 import { matchesAllowlist, parseAllowlist } from "../access";
-import { chunkText, dispatchMessage } from "./dispatch";
+import { dispatchMessage } from "./dispatch";
+import {
+	splitTelegramMarkdown,
+	stripTelegramMarkdown,
+	toTelegramMarkdown,
+} from "./telegram-format";
 import type { GatewayHandle, GatewayStartInput } from "./types";
 import { sleep } from "./types";
 
@@ -69,12 +74,24 @@ export const getTelegramBotInfo = async (token: string) => {
 };
 
 const sendMessage = async (token: string, chatId: number, text: string) => {
-	for (const chunk of chunkText(text, 4000)) {
-		await telegramApi(token, "sendMessage", {
-			chat_id: chatId,
-			text: chunk,
-			link_preview_options: { is_disabled: true },
-		});
+	for (const chunk of splitTelegramMarkdown(toTelegramMarkdown(text))) {
+		try {
+			await telegramApi(token, "sendMessage", {
+				chat_id: chatId,
+				text: chunk,
+				parse_mode: "MarkdownV2",
+				link_preview_options: { is_disabled: true },
+			});
+		} catch (error) {
+			// Telegram rejects the whole message when one entity is malformed;
+			// deliver it unformatted instead of losing the answer.
+			if ((error as { errorCode?: number }).errorCode !== 400) throw error;
+			await telegramApi(token, "sendMessage", {
+				chat_id: chatId,
+				text: stripTelegramMarkdown(chunk),
+				link_preview_options: { is_disabled: true },
+			});
+		}
 	}
 };
 
