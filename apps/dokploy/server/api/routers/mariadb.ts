@@ -36,6 +36,7 @@ import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "@/server/api/trpc";
 import { audit } from "@/server/api/utils/audit";
+import { redactServiceMonitoringToken } from "@/server/api/utils/monitoring";
 import {
 	apiChangeMariaDBStatus,
 	apiCreateMariaDB,
@@ -132,7 +133,7 @@ export const mariadbRouter = createTRPCRouter({
 					message: "You are not authorized to access this Mariadb",
 				});
 			}
-			return mariadb;
+			return redactServiceMonitoringToken(mariadb);
 		}),
 
 	start: protectedProcedure

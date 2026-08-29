@@ -17,6 +17,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import type { MonitoringServiceType } from "@/server/api/utils/monitoring";
 import { api } from "@/utils/api";
 import { ContainerBlockChart } from "./container-block-chart";
 import { ContainerCPUChart } from "./container-cpu-chart";
@@ -71,15 +72,15 @@ interface ContainerMetric {
 
 interface Props {
 	appName: string;
-	baseUrl: string;
-	token: string;
+	serviceId: string;
+	serviceType: MonitoringServiceType;
 	serverId?: string;
 }
 
 export const ContainerPaidMonitoring = ({
 	appName,
-	baseUrl,
-	token,
+	serviceId,
+	serviceType,
 	serverId,
 }: Props) => {
 	const [historicalData, setHistoricalData] = useState<ContainerMetric[]>([]);
@@ -97,10 +98,10 @@ export const ContainerPaidMonitoring = ({
 		refetch,
 	} = api.user.getContainerMetrics.useQuery(
 		{
-			url: baseUrl,
-			token,
+			serviceId,
+			serviceType,
+			containerName: appName,
 			dataPoints,
-			appName,
 		},
 		{
 			refetchInterval:
@@ -119,6 +120,7 @@ export const ContainerPaidMonitoring = ({
 			toast.error(error.message || "Failed to restart monitoring");
 		},
 	});
+	const { data: permissions } = api.user.getPermissions.useQuery();
 
 	useEffect(() => {
 		if (!data) return;
@@ -150,8 +152,10 @@ export const ContainerPaidMonitoring = ({
 							? queryError.message
 							: "Failed to fetch metrics, Please check your monitoring Instance is Configured correctly."}
 					</p>
-					<p className="text-sm text-muted-foreground">URL: {baseUrl}</p>
-					{serverId && (
+					<p className="text-sm text-muted-foreground">
+						Remote metrics are fetched securely through Dokploy.
+					</p>
+					{serverId && permissions?.server.create && (
 						<Button
 							className="mt-4"
 							variant="outline"

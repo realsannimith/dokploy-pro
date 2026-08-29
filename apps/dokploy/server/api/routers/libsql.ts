@@ -29,6 +29,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "@/server/api/trpc";
 import { audit } from "@/server/api/utils/audit";
+import { redactServiceMonitoringToken } from "@/server/api/utils/monitoring";
 import { db } from "@/server/db";
 import {
 	apiChangeLibsqlStatus,
@@ -119,7 +120,7 @@ export const libsqlRouter = createTRPCRouter({
 					message: "You are not authorized to access this Libsql",
 				});
 			}
-			return libsql;
+			return redactServiceMonitoringToken(libsql);
 		}),
 
 	start: protectedProcedure

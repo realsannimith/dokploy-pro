@@ -50,6 +50,7 @@ import {
 	withPermission,
 } from "@/server/api/trpc";
 import { audit } from "@/server/api/utils/audit";
+import { redactServiceMonitoringToken } from "@/server/api/utils/monitoring";
 import {
 	apiCreateApplication,
 	apiDeployApplication,
@@ -185,7 +186,7 @@ export const applicationRouter = createTRPCRouter({
 			}
 
 			return {
-				...application,
+				...redactServiceMonitoringToken(application),
 				hasGitProviderAccess,
 				unauthorizedProvider,
 			};

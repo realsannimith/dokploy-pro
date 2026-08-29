@@ -36,6 +36,7 @@ import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "@/server/api/trpc";
 import { audit } from "@/server/api/utils/audit";
+import { redactServiceMonitoringToken } from "@/server/api/utils/monitoring";
 import {
 	apiChangePostgresStatus,
 	apiCreatePostgres,
@@ -140,7 +141,7 @@ export const postgresRouter = createTRPCRouter({
 					message: "You are not authorized to access this Postgres",
 				});
 			}
-			return postgres;
+			return redactServiceMonitoringToken(postgres);
 		}),
 
 	start: protectedProcedure

@@ -35,7 +35,6 @@ import { ComposePaidMonitoring } from "@/components/dashboard/monitoring/paid/co
 import { AssignComposeNetworks } from "@/components/dashboard/networks/assign-compose-networks";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { AdvanceBreadcrumb } from "@/components/shared/advance-breadcrumb";
-import { AlertBlock } from "@/components/shared/alert-block";
 import { StatusTooltip } from "@/components/shared/status-tooltip";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -328,24 +327,12 @@ const Service = (
 											<div className="pt-2.5">
 												<div className="flex flex-col border rounded-lg ">
 													{data?.serverId ? (
-														data?.server?.metricsConfig?.server?.token ? (
-															<ComposePaidMonitoring
-																serverId={data?.serverId || ""}
-																baseUrl={`http://${data?.server?.ipAddress}:${data?.server?.metricsConfig?.server?.port}`}
-																appName={data?.appName || ""}
-																token={
-																	data?.server?.metricsConfig?.server?.token ||
-																	""
-																}
-																appType={data?.composeType || "docker-compose"}
-															/>
-														) : (
-															<AlertBlock type="info" className="m-4">
-																Monitoring is not enabled on this server. Enable
-																it from the Monitoring page or in Settings →
-																Remote Servers → Setup Server → Monitoring.
-															</AlertBlock>
-														)
+														<ComposePaidMonitoring
+															serverId={data.serverId}
+															serviceId={composeId}
+															appName={data?.appName || ""}
+															appType={data?.composeType || "docker-compose"}
+														/>
 													) : (
 														<>
 															{/* {monitoring?.enabledFeatures &&

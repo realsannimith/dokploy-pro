@@ -81,6 +81,7 @@ import { cancelDeployment, deploy } from "@/server/utils/deploy";
 import { generatePassword } from "@/templates/utils";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 import { audit } from "../utils/audit";
+import { redactServiceMonitoringToken } from "../utils/monitoring";
 
 export const composeRouter = createTRPCRouter({
 	create: protectedProcedure
@@ -185,7 +186,7 @@ export const composeRouter = createTRPCRouter({
 			}
 
 			return {
-				...compose,
+				...redactServiceMonitoringToken(compose),
 				hasGitProviderAccess,
 				unauthorizedProvider,
 			};

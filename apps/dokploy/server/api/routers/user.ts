@@ -38,6 +38,7 @@ import { and, asc, desc, eq, gt, ne } from "drizzle-orm";
 import { z } from "zod";
 import { apiKeyNameSchema } from "@/lib/api-keys";
 import { audit } from "@/server/api/utils/audit";
+import { resolveContainerMonitoringTarget } from "@/server/api/utils/monitoring";
 import {
 	adminProcedure,
 	createTRPCRouter,
@@ -525,34 +526,49 @@ export const userRouter = createTRPCRouter({
 	getContainerMetrics: withPermission("monitoring", "read")
 		.input(
 			z.object({
-				url: z.string(),
-				token: z.string(),
-				appName: z.string(),
-				dataPoints: z.string(),
+				serviceId: z.string().min(1),
+				serviceType: z.enum([
+					"application",
+					"compose",
+					"postgres",
+					"mysql",
+					"mariadb",
+					"mongo",
+					"redis",
+					"libsql",
+				]),
+				containerName: z
+					.string()
+					.min(1)
+					.max(255)
+					.regex(/^[a-zA-Z0-9._-]+$/, "Invalid container name")
+					.optional(),
+				dataPoints: z.enum([
+					"50",
+					"200",
+					"500",
+					"800",
+					"1200",
+					"1600",
+					"2000",
+					"all",
+				]),
 			}),
 		)
-		.query(async ({ input }) => {
+		.query(async ({ input, ctx }) => {
 			try {
-				if (!input.appName) {
-					throw new Error(
-						[
-							"No Application Selected:",
-							"",
-							"Make Sure to select an application to monitor.",
-						].join("\n"),
-					);
-				}
-				const url = new URL(`${input.url}/metrics/containers`);
+				const target = await resolveContainerMonitoringTarget(ctx, input);
+				const url = new URL(target.url);
 				url.searchParams.append("limit", input.dataPoints);
-				url.searchParams.append("appName", input.appName);
+				url.searchParams.append("appName", target.containerName);
 				const response = await fetch(url.toString(), {
 					headers: {
-						Authorization: `Bearer ${input.token}`,
+						Authorization: `Bearer ${target.token}`,
 					},
 				});
 				if (!response.ok) {
 					throw new Error(
-						`Error ${response.status}: ${response.statusText}. Please verify that the application "${input.appName}" is running and this service is included in the monitoring configuration.`,
+						`Error ${response.status}: ${response.statusText}. Verify that the service is running and included in the monitoring configuration.`,
 					);
 				}
 
@@ -560,7 +576,7 @@ export const userRouter = createTRPCRouter({
 				if (!Array.isArray(data) || data.length === 0) {
 					throw new Error(
 						[
-							`No monitoring data available for "${input.appName}". This could be because:`,
+							`No monitoring data is available for "${target.containerName}" yet.`,
 							"",
 							"1. The container was recently started - wait a few minutes for data to be collected",
 							"2. The container is not running - verify its status",

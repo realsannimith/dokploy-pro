@@ -26,18 +26,16 @@ import { ContainerPaidMonitoring } from "./show-paid-container-monitoring";
 
 interface Props {
 	appName: string;
+	serviceId: string;
 	serverId?: string;
 	appType: "stack" | "docker-compose";
-	baseUrl: string;
-	token: string;
 }
 
 export const ComposePaidMonitoring = ({
 	appName,
+	serviceId,
 	appType = "stack",
 	serverId,
-	baseUrl,
-	token,
 }: Props) => {
 	const { data, isPending } = api.docker.getContainersByAppNameMatch.useQuery(
 		{
@@ -129,8 +127,8 @@ export const ComposePaidMonitoring = ({
 					<div className="flex flex-col gap-4">
 						<ContainerPaidMonitoring
 							appName={containerAppName || ""}
-							baseUrl={baseUrl}
-							token={token}
+							serviceId={serviceId}
+							serviceType="compose"
 							serverId={serverId}
 						/>
 					</div>

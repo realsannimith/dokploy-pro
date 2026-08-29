@@ -35,6 +35,7 @@ import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "@/server/api/trpc";
 import { audit } from "@/server/api/utils/audit";
+import { redactServiceMonitoringToken } from "@/server/api/utils/monitoring";
 import {
 	apiChangeMongoStatus,
 	apiCreateMongo,
@@ -136,7 +137,7 @@ export const mongoRouter = createTRPCRouter({
 					message: "You are not authorized to access this mongo",
 				});
 			}
-			return mongo;
+			return redactServiceMonitoringToken(mongo);
 		}),
 
 	start: protectedProcedure
