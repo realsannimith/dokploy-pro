@@ -1,4 +1,5 @@
 export * from "./account";
+export * from "./agent";
 export * from "./ai";
 export * from "./application";
 export * from "./audit-log";

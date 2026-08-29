@@ -1,5 +1,6 @@
 import { createTRPCRouter } from "../api/trpc";
 import { adminRouter } from "./routers/admin";
+import { agentRouter } from "./routers/agent";
 import { aiRouter } from "./routers/ai";
 import { applicationRouter } from "./routers/application";
 import { backupRouter } from "./routers/backup";
@@ -107,6 +108,7 @@ export const appRouter = createTRPCRouter({
 	user: userRouter,
 	vaultProvider: vaultProviderRouter,
 	ai: aiRouter,
+	agent: agentRouter,
 	organization: organizationRouter,
 	licenseKey: licenseKeyRouter,
 	sso: ssoRouter,
