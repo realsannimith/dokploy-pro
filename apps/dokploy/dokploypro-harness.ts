@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import process from "node:process";
-import { createInterface } from "node:readline/promises";
 import type { AgentToolConfig } from "@dokploy/server/db/schema/agent";
 import packageInfo from "./package.json";
+import { HarnessComposer } from "./server/agent/terminal-composer";
 import {
 	COMMAND_HELP,
 	dimText,
@@ -13,13 +13,11 @@ import {
 	HarnessSpinner,
 	HarnessStreamRenderer,
 	parseHarnessArgs,
-	promptText,
 	renderApproval,
 	renderBanner,
 	renderMessage,
 	renderRule,
 	renderSessionPanel,
-	renderStatusBar,
 	renderToolProgress,
 	successText,
 	terminalColorsEnabled,
@@ -130,37 +128,38 @@ const main = async () => {
 	}
 
 	const colors = terminalColorsEnabled();
-	const rl = createInterface({
-		input: process.stdin,
-		output: process.stdout,
-		historySize: 200,
-		removeHistoryDuplicates: true,
-	});
 	const spinner = new HarnessSpinner(process.stdout, colors);
 	let activeAbort: AbortController | undefined;
 	let activeStream: HarnessStreamRenderer | undefined;
 	let closed = false;
 	let goodbyeWritten = false;
-
-	rl.on("close", () => {
-		closed = true;
-	});
-	rl.on("SIGINT", () => {
-		if (activeAbort) {
-			activeAbort.abort();
-			activeStream?.pause();
-			spinner.stop();
-			process.stdout.write(`${warningText("Interrupted.", colors)}\n`);
-			return;
-		}
-		process.stdout.write(`\n${dimText("Goodbye! ◈", colors)}\n`);
-		goodbyeWritten = true;
-		rl.close();
-	});
+	let composer: HarnessComposer;
+	composer = new HarnessComposer(
+		process.stdin,
+		process.stdout,
+		colors,
+		() => {
+			if (activeAbort) {
+				activeAbort.abort();
+				activeStream?.pause();
+				spinner.stop();
+				process.stdout.write(`${warningText("Interrupted.", colors)}\n`);
+				return;
+			}
+			closed = true;
+			process.stdout.write(`\n${dimText("Goodbye! ◈", colors)}\n`);
+			goodbyeWritten = true;
+			composer.close();
+		},
+		() => {
+			closed = true;
+		},
+	);
 
 	try {
 		await loadRuntime();
-		const agent = await selectAgent(rl, args.agentId, colors);
+		const agent = await selectAgent(composer, args.agentId);
+		if (!agent) return;
 		validateAgent(agent);
 		const sessionKey = (
 			args.sessionKey ||
@@ -223,26 +222,20 @@ const main = async () => {
 						)
 					).length
 				: 0;
-			process.stdout.write(
-				`\n${renderStatusBar(
-					{
-						model: agent.model || agent.ai?.model || "Not configured",
-						session: statusConversation?.title || "Fresh terminal session",
-						messages: statusMessageCount,
-						tools: availableTools,
-						skills: availableSkills,
-						elapsedMs: Date.now() - sessionStartedAt,
-					},
-					process.stdout.columns ?? 80,
-					colors,
-				)}\n`,
-			);
-			let answer: string;
-			try {
-				answer = await rl.question(`\n${promptText(colors)}`);
-			} catch {
-				break;
-			}
+			const answer = await composer.ask({
+				status: {
+					model: agent.model || agent.ai?.model || "Not configured",
+					session: statusConversation?.title || "Fresh terminal session",
+					messages: statusMessageCount,
+					tools: availableTools,
+					skills: availableSkills,
+					elapsedMs: Date.now() - sessionStartedAt,
+					state: "ready",
+				},
+				placeholder: "Ask Dokploy anything…",
+				allowMultiline: true,
+			});
+			if (answer === null) break;
 			let { command, args: commandArgs, text } = parseCommand(answer);
 			if (!text) continue;
 
@@ -389,10 +382,14 @@ const main = async () => {
 								summary,
 							});
 							process.stdout.write(`\n${renderApproval(summary, colors)}\n`);
-							const approval = await rl.question(
-								`${warningText("  Approve once?", colors)} [y/N] `,
-							);
-							const approved = /^(?:y|yes)$/i.test(approval.trim());
+							const approval = await composer.ask({
+								label: "Approve once? [y/N]",
+								placeholder: "No",
+								tone: "warning",
+								allowMultiline: false,
+								recordHistory: false,
+							});
+							const approved = /^(?:y|yes)$/i.test((approval ?? "").trim());
 							spinner.start("resuming...");
 							const resolved = await resolvePendingAction(
 								action.actionId,
@@ -451,7 +448,7 @@ const main = async () => {
 		}
 	} finally {
 		spinner.stop();
-		if (!closed) rl.close();
+		composer.close();
 		if (!goodbyeWritten) {
 			process.stdout.write(`${dimText("Goodbye! ◈", colors)}\n`);
 		}
@@ -462,10 +459,9 @@ const main = async () => {
 };
 
 const selectAgent = async (
-	rl: ReturnType<typeof createInterface>,
+	composer: HarnessComposer,
 	wantedId: string | undefined,
-	colors: boolean,
-) => {
+): Promise<HarnessAgent | null> => {
 	const agents = (await db.query.agent.findMany({
 		with: { ai: true, organization: true },
 	})) as HarnessAgent[];
@@ -496,7 +492,13 @@ const selectAgent = async (
 			}\n`,
 		);
 	}
-	const answer = await rl.question(`\n${promptText(colors)}Agent number: `);
+	const answer = await composer.ask({
+		label: "Agent number",
+		placeholder: "1",
+		allowMultiline: false,
+		recordHistory: false,
+	});
+	if (answer === null) return null;
 	const index = Number.parseInt(answer.trim(), 10) - 1;
 	const selected = candidates[index];
 	if (!selected) throw new Error("No agent selected.");

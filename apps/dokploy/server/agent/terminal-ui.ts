@@ -189,6 +189,7 @@ export interface StatusBarData {
 	tools: number;
 	skills: number;
 	elapsedMs: number;
+	state?: string;
 }
 
 const formatElapsed = (durationMs: number) => {
@@ -204,24 +205,33 @@ export const renderStatusBar = (
 	columns = 80,
 	colors = true,
 ) => {
-	const width = Math.max(20, columns - 2);
+	const width = Math.max(18, columns - 1);
 	const model = clip(data.model, columns >= 76 ? 26 : 18);
 	const session = clip(data.session, Math.max(10, Math.floor(columns / 3)));
 	const elapsed = formatElapsed(data.elapsedMs);
 	const sections =
 		columns >= 76
 			? [
+					data.state || "ready",
 					`⚕ ${model}`,
 					`${data.messages} msgs`,
 					`${data.tools} tools`,
 					`${data.skills} skills`,
 					elapsed,
-					session,
 				]
 			: columns >= 52
-				? [`⚕ ${model}`, `${data.messages} msgs`, elapsed, session]
-				: [`⚕ ${model}`, elapsed];
-	return paint(clip(sections.join(" │ "), width), HARNESS_THEME.muted, colors);
+				? [
+						data.state || "ready",
+						`⚕ ${model}`,
+						`${data.messages} msgs`,
+						elapsed,
+					]
+				: [data.state || "ready", `⚕ ${model}`];
+	const left = `─ ${sections.join(" │ ")}`;
+	const right = columns >= 42 ? ` ${session}` : "";
+	const ruleWidth = Math.max(1, width - left.length - right.length - 1);
+	const line = clip(`${left} ${"─".repeat(ruleWidth)}${right}`, width);
+	return paint(line, HARNESS_THEME.muted, colors);
 };
 
 const inlineMarkdown = (line: string, colors: boolean) => {
@@ -373,6 +383,9 @@ export const COMMAND_HELP = `Commands
   /exit                Close the harness
 
 Keys
+  Enter                Send the message
+  Shift/Alt+Enter      Insert a new line
+  Up/Down              Browse prompt history
   Ctrl+C               Interrupt a running agent, or exit when idle
   Ctrl+D               Exit`;
 

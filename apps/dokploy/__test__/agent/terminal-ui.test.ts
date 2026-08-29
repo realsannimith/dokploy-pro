@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { renderComposerView } from "@/server/agent/terminal-composer";
 import {
 	HarnessStreamRenderer,
 	parseHarnessArgs,
@@ -113,6 +114,38 @@ describe("Dokploy Pro terminal harness UI", () => {
 		expect(status).toContain("30 tools");
 		expect(status).toContain("4 skills");
 		expect(status).toContain("2m");
+		expect(status).toContain("─ ready │");
+		expect(status).toContain("Deploy staging safely");
+	});
+
+	it("renders the Hermes-style chat composer with placeholder and wrapping", () => {
+		const question = {
+			status: {
+				model: "provider/operations-model",
+				session: "Deploy staging",
+				messages: 12,
+				tools: 30,
+				skills: 4,
+				elapsedMs: 125_000,
+			},
+			placeholder: "Ask Dokploy anything…",
+		};
+		const empty = renderComposerView(question, "", 0, 80, false);
+		expect(empty.text).toContain("─ ready │");
+		expect(empty.text).toContain("❯ Ask Dokploy anything…");
+		expect(empty.cursorRow).toBe(2);
+		expect(empty.cursorColumn).toBe(2);
+
+		const multiline = renderComposerView(
+			question,
+			"Deploy the application safely\nand verify the health check",
+			24,
+			34,
+			false,
+		);
+		expect(multiline.rows).toBeGreaterThan(3);
+		expect(multiline.text).toContain("❯ Deploy the application safely");
+		expect(multiline.text).toContain("  and verify the health check");
 	});
 
 	it("streams assistant deltas with a live cursor and inline styling", () => {
