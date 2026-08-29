@@ -157,22 +157,22 @@ export const ShowStorageActions = ({ serverId }: Props) => {
 					>
 						<span>Clean Docker Builder & System</span>
 					</DropdownMenuItem>
-					{!serverId && (
-						<DropdownMenuItem
-							className="w-full cursor-pointer"
-							onClick={async () => {
-								await cleanMonitoring()
-									.then(async () => {
-										toast.success("Cleaned Monitoring");
-									})
-									.catch(() => {
-										toast.error("Error cleaning Monitoring");
-									});
-							}}
-						>
-							<span>Clean Monitoring</span>
-						</DropdownMenuItem>
-					)}
+					<DropdownMenuItem
+						className="w-full cursor-pointer"
+						onClick={async () => {
+							await cleanMonitoring({
+								serverId: serverId,
+							})
+								.then(async () => {
+									toast.success("Cleaned Monitoring");
+								})
+								.catch(() => {
+									toast.error("Error cleaning Monitoring");
+								});
+						}}
+					>
+						<span>Clean Monitoring</span>
+					</DropdownMenuItem>
 
 					<DropdownMenuItem
 						className="w-full cursor-pointer"

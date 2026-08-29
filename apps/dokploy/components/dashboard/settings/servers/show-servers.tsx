@@ -1,5 +1,7 @@
 import { format } from "date-fns";
 import {
+	Activity,
+	Brush,
 	Clock,
 	Key,
 	KeyIcon,
@@ -12,6 +14,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/router";
+import { useState } from "react";
 import { toast } from "sonner";
 import { AlertBlock } from "@/components/shared/alert-block";
 import { DialogAction } from "@/components/shared/dialog-action";
@@ -44,6 +47,23 @@ export const ShowServers = () => {
 	const query = router.query;
 	const { data, refetch, isPending } = api.server.all.useQuery();
 	const { mutateAsync } = api.server.remove.useMutation();
+	const [enablingMonitoringId, setEnablingMonitoringId] = useState<
+		string | null
+	>(null);
+	const enableMonitoring = api.server.enableMonitoring.useMutation({
+		onSuccess: async () => {
+			toast.success(
+				"Monitoring enabled — the first metrics can take a minute to appear.",
+			);
+			await refetch();
+		},
+		onError: (error) => {
+			toast.error(error.message);
+		},
+		onSettled: () => {
+			setEnablingMonitoringId(null);
+		},
+	});
 	const { data: sshKeys } = api.sshKey.all.useQuery();
 	const { data: isCloud } = api.settings.isCloud.useQuery();
 	const { data: canCreateMoreServers } =
@@ -114,6 +134,14 @@ export const ShowServers = () => {
 														const canDelete = server.totalSum === 0;
 														const isActive = server.serverStatus === "active";
 														const isBuildServer = server.serverType === "build";
+														const monitoringActive = Boolean(
+															server.metricsConfig?.server?.token,
+														);
+														const canEnableMonitoring =
+															permissions?.server.create &&
+															isActive &&
+															!isBuildServer &&
+															Boolean(server.sshKeyId);
 														return (
 															<Card
 																key={server.serverId}
@@ -210,6 +238,68 @@ export const ShowServers = () => {
 																			{server.sshKeyId ? "Yes" : "No"}
 																		</span>
 																	</div>
+																	{!isBuildServer && (
+																		<div className="flex items-center gap-2 text-sm">
+																			<Activity className="size-4 text-muted-foreground" />
+																			<span className="text-muted-foreground">
+																				Monitoring:
+																			</span>
+																			{monitoringActive ? (
+																				<span className="flex items-center gap-1.5 font-medium">
+																					<span className="size-1.5 rounded-full bg-green-500" />
+																					Active
+																				</span>
+																			) : (
+																				<>
+																					<span className="flex items-center gap-1.5 font-medium">
+																						<span className="size-1.5 rounded-full bg-yellow-500" />
+																						Off
+																					</span>
+																					{canEnableMonitoring && (
+																						<Button
+																							variant="link"
+																							size="sm"
+																							className="h-auto p-0 text-xs"
+																							disabled={
+																								enableMonitoring.isPending
+																							}
+																							onClick={() => {
+																								setEnablingMonitoringId(
+																									server.serverId,
+																								);
+																								enableMonitoring.mutate({
+																									serverId: server.serverId,
+																								});
+																							}}
+																						>
+																							{enablingMonitoringId ===
+																							server.serverId ? (
+																								<span className="flex items-center gap-1">
+																									<Loader2 className="size-3 animate-spin" />
+																									Enabling...
+																								</span>
+																							) : (
+																								"Enable"
+																							)}
+																						</Button>
+																					)}
+																				</>
+																			)}
+																		</div>
+																	)}
+																	{!isBuildServer && (
+																		<div className="flex items-center gap-2 text-sm">
+																			<Brush className="size-4 text-muted-foreground" />
+																			<span className="text-muted-foreground">
+																				Docker Cleanup:
+																			</span>
+																			<span className="font-medium">
+																				{server.enableDockerCleanup
+																					? "Daily"
+																					: "Off"}
+																			</span>
+																		</div>
+																	)}
 																	<div className="flex items-center gap-2 text-sm pt-2 border-t">
 																		<Clock className="size-4 text-muted-foreground" />
 																		<span className="text-xs text-muted-foreground">
@@ -298,8 +388,18 @@ export const ShowServers = () => {
 																								/>
 																							</div>
 																						</TooltipTrigger>
-																						<TooltipContent>
-																							<p>Web Server Actions</p>
+																						<TooltipContent className="max-w-xs">
+																							<div className="space-y-1">
+																								<p className="font-semibold">
+																									Server Actions
+																								</p>
+																								<p className="text-xs text-muted-foreground">
+																									Reload Traefik, clean unused
+																									Docker images, volumes and
+																									containers, and toggle the
+																									daily cleanup
+																								</p>
+																							</div>
 																						</TooltipContent>
 																					</Tooltip>
 																				)}

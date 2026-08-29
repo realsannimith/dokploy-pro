@@ -38,6 +38,7 @@ import { ContainerPaidMonitoring } from "@/components/dashboard/monitoring/paid/
 import { AssignNetworks } from "@/components/dashboard/networks/assign-networks";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { AdvanceBreadcrumb } from "@/components/shared/advance-breadcrumb";
+import { AlertBlock } from "@/components/shared/alert-block";
 import { StatusTooltip } from "@/components/shared/status-tooltip";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -93,7 +94,6 @@ const Service = (
 		},
 	);
 
-	const { data: isCloud } = api.settings.isCloud.useQuery();
 	const { data: serverIp } = api.settings.getIp.useQuery();
 	const { data: auth } = api.user.get.useQuery();
 	const { data: permissions } = api.user.getPermissions.useQuery();
@@ -269,7 +269,7 @@ const Service = (
 												<TabsTrigger value="patches">Patches</TabsTrigger>
 											)}
 											{permissions?.monitoring.read &&
-												((data?.serverId && isCloud) || !data?.server) && (
+												(data?.serverId || !data?.server) && (
 													<TabsTrigger value="monitoring">
 														Monitoring
 													</TabsTrigger>
@@ -297,14 +297,23 @@ const Service = (
 										<TabsContent value="monitoring">
 											<div className="pt-2.5">
 												<div className="flex flex-col gap-4 border rounded-lg p-6">
-													{data?.serverId && isCloud ? (
-														<ContainerPaidMonitoring
-															appName={data?.appName || ""}
-															baseUrl={`${data?.serverId ? `http://${data?.server?.ipAddress}:${data?.server?.metricsConfig?.server?.port}` : "http://localhost:4500"}`}
-															token={
-																data?.server?.metricsConfig?.server?.token || ""
-															}
-														/>
+													{data?.serverId ? (
+														data?.server?.metricsConfig?.server?.token ? (
+															<ContainerPaidMonitoring
+																appName={data?.appName || ""}
+																baseUrl={`http://${data?.server?.ipAddress}:${data?.server?.metricsConfig?.server?.port}`}
+																token={
+																	data?.server?.metricsConfig?.server?.token ||
+																	""
+																}
+															/>
+														) : (
+															<AlertBlock type="info">
+																Monitoring is not enabled on this server. Enable
+																it from the Monitoring page or in Settings →
+																Remote Servers → Setup Server → Monitoring.
+															</AlertBlock>
+														)
 													) : (
 														<>
 															{/* {monitoring?.enabledFeatures &&

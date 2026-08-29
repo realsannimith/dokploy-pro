@@ -4,13 +4,17 @@ import type { GetServerSidePropsContext } from "next";
 import type { ReactElement } from "react";
 import superjson from "superjson";
 import { AiForm } from "@/components/dashboard/settings/ai-form";
+import { McpConnection } from "@/components/dashboard/settings/api/mcp-connection";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { appRouter } from "@/server/api/root";
+import { api } from "@/utils/api";
 
 const Page = () => {
+	const { data: isCloud } = api.settings.isCloud.useQuery();
 	return (
 		<div className="flex flex-col gap-4 w-full">
 			<AiForm />
+			{!isCloud && <McpConnection />}
 		</div>
 	);
 };

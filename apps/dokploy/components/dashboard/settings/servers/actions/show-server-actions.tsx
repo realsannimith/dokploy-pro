@@ -41,8 +41,12 @@ export const ShowServerActions = ({ serverId, asButton = false }: Props) => {
 			)}
 			<DialogContent className="sm:max-w-xl">
 				<div className="flex flex-col gap-1">
-					<DialogTitle className="text-xl">Web server settings</DialogTitle>
-					<DialogDescription>Reload or clean the web server.</DialogDescription>
+					<DialogTitle className="text-xl">Server actions</DialogTitle>
+					<DialogDescription>
+						Reload Traefik, free up disk space (unused images, volumes,
+						containers, build cache) and manage the daily Docker cleanup — the
+						same maintenance actions available for the Dokploy server.
+					</DialogDescription>
 				</div>
 
 				<div className="grid grid-cols-2 w-full gap-4">

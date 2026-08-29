@@ -12,6 +12,7 @@ import {
 	cleanupSystem,
 	cleanupVolumes,
 	DEFAULT_UPDATE_DATA,
+	execAsyncRemote,
 	findServerById,
 	getDockerDiskUsage,
 	getDokployImage,
@@ -35,6 +36,7 @@ import {
 	reloadDockerResource,
 	sendDockerCleanupNotifications,
 	setupGPUSupport,
+	setupMonitoring,
 	spawnAsync,
 	startLogCleanup,
 	stopLogCleanup,
@@ -245,19 +247,40 @@ export const settingsRouter = createTRPCRouter({
 			});
 			return result;
 		}),
-	cleanMonitoring: adminProcedure.mutation(async ({ ctx }) => {
-		if (IS_CLOUD) {
+	cleanMonitoring: adminProcedure
+		.input(apiServerSchema)
+		.mutation(async ({ ctx, input }) => {
+			if (input?.serverId) {
+				const remoteServer = await findServerById(input.serverId);
+				if (remoteServer.organizationId !== ctx.session.activeOrganizationId) {
+					throw new TRPCError({
+						code: "UNAUTHORIZED",
+						message: "You are not authorized to access this server",
+					});
+				}
+				await execAsyncRemote(
+					input.serverId,
+					"rm -f /etc/dokploy/monitoring/monitoring.db && touch /etc/dokploy/monitoring/monitoring.db",
+				);
+				// Redeploy the agent so it reopens the fresh database instead of
+				// keeping the deleted inode alive.
+				if (remoteServer.metricsConfig?.server?.token) {
+					await setupMonitoring(input.serverId);
+				}
+			} else {
+				if (IS_CLOUD) {
+					return true;
+				}
+				const { MONITORING_PATH } = paths();
+				await recreateDirectory(MONITORING_PATH);
+			}
+			await audit(ctx, {
+				action: "delete",
+				resourceType: "settings",
+				resourceName: "clean-monitoring",
+			});
 			return true;
-		}
-		const { MONITORING_PATH } = paths();
-		await recreateDirectory(MONITORING_PATH);
-		await audit(ctx, {
-			action: "delete",
-			resourceType: "settings",
-			resourceName: "clean-monitoring",
-		});
-		return true;
-	}),
+		}),
 	getDockerDiskUsage: adminProcedure.query(async () => {
 		if (IS_CLOUD) {
 			return [];

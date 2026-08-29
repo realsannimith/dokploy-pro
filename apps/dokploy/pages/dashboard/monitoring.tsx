@@ -5,6 +5,7 @@ import { HomeIcon, Loader2, ServerIcon, TerminalIcon } from "lucide-react";
 import type { GetServerSidePropsContext } from "next";
 import Link from "next/link";
 import { type ReactElement, useState } from "react";
+import { toast } from "sonner";
 import { ContainerFreeMonitoring } from "@/components/dashboard/monitoring/free/container/show-free-container-monitoring";
 import { ShowPaidMonitoring } from "@/components/dashboard/monitoring/paid/servers/show-paid-monitoring";
 import { TerminalModal } from "@/components/dashboard/settings/web-server/terminal-modal";
@@ -81,9 +82,24 @@ const Dashboard = () => {
 	const [selectedServer, setSelectedServer] = useState(DOKPLOY_SERVER);
 
 	const { data: monitoring, isPending } = api.user.getMetricsToken.useQuery();
-	const { data: servers, isPending: isPendingServers } =
-		api.server.monitoringTargets.useQuery();
+	const {
+		data: servers,
+		isPending: isPendingServers,
+		refetch: refetchServers,
+	} = api.server.monitoringTargets.useQuery();
 	const { data: user } = api.user.get.useQuery();
+	const { data: permissions } = api.user.getPermissions.useQuery();
+	const enableMonitoring = api.server.enableMonitoring.useMutation({
+		onSuccess: async () => {
+			toast.success(
+				"Monitoring enabled — the first metrics can take a minute to appear.",
+			);
+			await refetchServers();
+		},
+		onError: (error) => {
+			toast.error(error.message);
+		},
+	});
 
 	const isAdmin = user?.role === "owner" || user?.role === "admin";
 
@@ -142,6 +158,38 @@ const Dashboard = () => {
 		}
 
 		if (!remoteServer.monitoringEnabled) {
+			if (permissions?.server.create) {
+				return (
+					<div className="flex min-h-[40vh] flex-col items-center justify-center gap-4 rounded-xl border border-border bg-card">
+						<p className="text-sm text-muted-foreground">
+							Monitoring is off on {remoteServer.name}.
+						</p>
+						<div className="flex items-center gap-2">
+							<Button
+								size="sm"
+								isLoading={enableMonitoring.isPending}
+								onClick={() =>
+									enableMonitoring.mutate({
+										serverId: remoteServer.serverId,
+									})
+								}
+							>
+								Enable monitoring
+							</Button>
+							<Button asChild size="sm" variant="outline">
+								<Link href="/dashboard/settings/servers">
+									Configure manually
+								</Link>
+							</Button>
+						</div>
+						<p className="max-w-md px-4 text-center text-xs text-muted-foreground">
+							This deploys the monitoring agent on {remoteServer.name} with
+							default settings — the same metrics the Dokploy server shows. You
+							can fine-tune it later in Setup Server → Monitoring.
+						</p>
+					</div>
+				);
+			}
 			return (
 				<EmptyState
 					title={`Monitoring is off on ${remoteServer.name}.`}

@@ -1,4 +1,5 @@
 import {
+	autoConfigureMonitoring,
 	createServer,
 	defaultCommand,
 	deleteServer,
@@ -422,6 +423,32 @@ export const serverRouter = createTRPCRouter({
 					cause: error as Error,
 				});
 			}
+		}),
+	enableMonitoring: withPermission("server", "create")
+		.input(apiFindOneServer)
+		.mutation(async ({ input, ctx }) => {
+			const server = await findServerById(input.serverId);
+			if (server.organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to setup this server",
+				});
+			}
+			if (server.serverType !== "deploy") {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "Monitoring is only available on deploy servers",
+				});
+			}
+
+			await autoConfigureMonitoring(input.serverId);
+			await audit(ctx, {
+				action: "update",
+				resourceType: "server",
+				resourceId: input.serverId,
+				resourceName: server.name,
+			});
+			return true;
 		}),
 	setupMonitoring: withPermission("server", "create")
 		.input(apiUpdateServerMonitoring)

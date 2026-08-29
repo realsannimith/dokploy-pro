@@ -26,6 +26,7 @@ import { ShowDatabaseAdvancedSettings } from "@/components/dashboard/shared/show
 import { MariadbIcon } from "@/components/icons/data-tools-icons";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { AdvanceBreadcrumb } from "@/components/shared/advance-breadcrumb";
+import { AlertBlock } from "@/components/shared/alert-block";
 import { StatusTooltip } from "@/components/shared/status-tooltip";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -64,7 +65,6 @@ const Mariadb = (
 	const { data: auth } = api.user.get.useQuery();
 	const { data: permissions } = api.user.getPermissions.useQuery();
 
-	const { data: isCloud } = api.settings.isCloud.useQuery();
 	const { data: serverIp } = api.settings.getIp.useQuery();
 
 	const { data: environments } = api.environment.byProjectId.useQuery({
@@ -203,11 +203,7 @@ const Mariadb = (
 										<TabsList
 											className={cn(
 												"md:grid md:w-fit max-md:overflow-y-scroll justify-start",
-												isCloud && data?.serverId
-													? "md:grid-cols-6"
-													: data?.serverId
-														? "md:grid-cols-5"
-														: "md:grid-cols-6",
+												"md:grid-cols-6",
 											)}
 										>
 											<TabsTrigger value="general">General</TabsTrigger>
@@ -220,7 +216,7 @@ const Mariadb = (
 												<TabsTrigger value="logs">Logs</TabsTrigger>
 											)}
 											{permissions?.monitoring.read &&
-												((data?.serverId && isCloud) || !data?.server) && (
+												(data?.serverId || !data?.server) && (
 													<TabsTrigger value="monitoring">
 														Monitoring
 													</TabsTrigger>
@@ -250,14 +246,23 @@ const Mariadb = (
 										<TabsContent value="monitoring">
 											<div className="pt-2.5">
 												<div className="flex flex-col gap-4 border rounded-lg p-6">
-													{data?.serverId && isCloud ? (
-														<ContainerPaidMonitoring
-															appName={data?.appName || ""}
-															baseUrl={`${data?.serverId ? `http://${data?.server?.ipAddress}:${data?.server?.metricsConfig?.server?.port}` : "http://localhost:4500"}`}
-															token={
-																data?.server?.metricsConfig?.server?.token || ""
-															}
-														/>
+													{data?.serverId ? (
+														data?.server?.metricsConfig?.server?.token ? (
+															<ContainerPaidMonitoring
+																appName={data?.appName || ""}
+																baseUrl={`http://${data?.server?.ipAddress}:${data?.server?.metricsConfig?.server?.port}`}
+																token={
+																	data?.server?.metricsConfig?.server?.token ||
+																	""
+																}
+															/>
+														) : (
+															<AlertBlock type="info">
+																Monitoring is not enabled on this server. Enable
+																it from the Monitoring page or in Settings →
+																Remote Servers → Setup Server → Monitoring.
+															</AlertBlock>
+														)
 													) : (
 														<>
 															{/* {monitoring?.enabledFeatures && (

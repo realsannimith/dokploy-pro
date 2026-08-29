@@ -1,14 +1,10 @@
 import path from "node:path";
-import { IS_CLOUD, paths } from "@dokploy/server/constants";
-import { getDokployUrl } from "@dokploy/server/services/admin";
+import { paths } from "@dokploy/server/constants";
 import {
 	createServerDeployment,
 	updateDeploymentStatus,
 } from "@dokploy/server/services/deployment";
-import {
-	findServerById,
-	updateServerById,
-} from "@dokploy/server/services/server";
+import { findServerById } from "@dokploy/server/services/server";
 import {
 	getDefaultMiddlewares,
 	getDefaultServerTraefikConfig,
@@ -20,15 +16,7 @@ import {
 import slug from "slugify";
 import { Client } from "ssh2";
 import { recreateDirectory } from "../utils/filesystem/directory";
-import { setupMonitoring } from "./monitoring-setup";
-
-const generateToken = () => {
-	const array = new Uint8Array(64);
-	crypto.getRandomValues(array);
-	return Array.from(array, (byte) => byte.toString(16).padStart(2, "0")).join(
-		"",
-	);
-};
+import { autoConfigureMonitoring } from "./monitoring-setup";
 
 export const slugify = (text: string | undefined) => {
 	if (!text) {
@@ -72,28 +60,18 @@ export const serverSetup = async (
 		);
 		await installRequirements(serverId, onData);
 
-		if (IS_CLOUD) {
-			onData?.("\nConfiguring Monitoring: 🔄\n");
-
-			const baseUrl = await getDokployUrl();
-			const token = generateToken();
-			const urlCallback = `${baseUrl}/api/trpc/notification.receiveNotification`;
-
-			// Update server with monitoring configuration
-			await updateServerById(serverId, {
-				metricsConfig: {
-					server: {
-						...server.metricsConfig.server,
-						token: token,
-						urlCallback: urlCallback,
-						cronJob: server.metricsConfig.server.cronJob || "0 0 * * *",
-					},
-					containers: server.metricsConfig.containers,
-				},
-			});
-
-			await setupMonitoring(serverId);
-			onData?.("\nMonitoring Configured: ✅\n");
+		if (!isBuildServer) {
+			try {
+				onData?.("\nConfiguring Monitoring: 🔄\n");
+				await autoConfigureMonitoring(serverId);
+				onData?.("\nMonitoring Configured: ✅\n");
+			} catch (monitoringError) {
+				// Monitoring is not essential to the server working, so a failure
+				// here shouldn't mark the whole setup as failed.
+				onData?.(
+					`\nMonitoring setup failed, you can retry it from the Monitoring tab: ${monitoringError} ⚠️\n`,
+				);
+			}
 		}
 
 		await updateDeploymentStatus(deployment.deploymentId, "done");

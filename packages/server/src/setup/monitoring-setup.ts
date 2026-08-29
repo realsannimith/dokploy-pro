@@ -1,4 +1,8 @@
-import { findServerById } from "@dokploy/server/services/server";
+import { getDokployUrl } from "@dokploy/server/services/admin";
+import {
+	findServerById,
+	updateServerById,
+} from "@dokploy/server/services/server";
 import { getWebServerSettings } from "@dokploy/server/services/web-server-settings";
 import type { CreateServiceOptions } from "dockerode";
 import { IS_CLOUD } from "../constants";
@@ -65,6 +69,37 @@ const deployMonitoringService = async (
 		await docker.createService(settings);
 		console.log("Monitoring Started ✅");
 	}
+};
+
+const generateMetricsToken = () => {
+	const array = new Uint8Array(64);
+	crypto.getRandomValues(array);
+	return Array.from(array, (byte) => byte.toString(16).padStart(2, "0")).join(
+		"",
+	);
+};
+
+// Provisions monitoring with sensible defaults so a remote server starts
+// reporting metrics without filling the setup form. An existing token is
+// preserved so re-running server setup doesn't invalidate a working agent.
+export const autoConfigureMonitoring = async (serverId: string) => {
+	const server = await findServerById(serverId);
+	const baseUrl = await getDokployUrl();
+	const token = server.metricsConfig?.server?.token || generateMetricsToken();
+
+	await updateServerById(serverId, {
+		metricsConfig: {
+			server: {
+				...server.metricsConfig.server,
+				token,
+				urlCallback: `${baseUrl}/api/trpc/notification.receiveNotification`,
+				cronJob: server.metricsConfig.server.cronJob || "0 0 * * *",
+			},
+			containers: server.metricsConfig.containers,
+		},
+	});
+
+	await setupMonitoring(serverId);
 };
 
 export const setupMonitoring = async (serverId: string) => {
