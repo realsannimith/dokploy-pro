@@ -73,6 +73,7 @@ export const startTelegram = ({
 	channelId,
 	agentId,
 	credentials,
+	onFatal,
 }: GatewayStartInput): GatewayHandle => {
 	const token = credentials.botToken || "";
 	let stopped = false;
@@ -141,6 +142,9 @@ export const startTelegram = ({
 				if (code === 401 || code === 404) {
 					console.error(
 						`[agent-gateway] Telegram token rejected for channel ${channelId}`,
+					);
+					onFatal?.(
+						"Telegram rejected the bot token. Save a valid token to restart the gateway.",
 					);
 					break;
 				}

@@ -295,9 +295,6 @@ importers:
       micromatch:
         specifier: 4.0.8
         version: 4.0.8
-      mysql2:
-        specifier: 3.15.3
-        version: 3.15.3
       nanoid:
         specifier: 3.3.11
         version: 3.3.11
@@ -13974,7 +13971,8 @@ snapshots:
     dependencies:
       possible-typed-array-names: 1.1.0
 
-  aws-ssl-profiles@1.1.2: {}
+  aws-ssl-profiles@1.1.2:
+    optional: true
 
   axios@1.18.0:
     dependencies:
@@ -15180,6 +15178,7 @@ snapshots:
   generate-function@2.3.1:
     dependencies:
       is-property: 1.0.2
+    optional: true
 
   generic-pool@3.9.0: {}
 
@@ -15651,7 +15650,8 @@ snapshots:
 
   is-promise@4.0.0: {}
 
-  is-property@1.0.2: {}
+  is-property@1.0.2:
+    optional: true
 
   is-regexp@3.1.0: {}
 
@@ -15939,7 +15939,8 @@ snapshots:
     dependencies:
       yallist: 3.1.1
 
-  lru.min@1.1.4: {}
+  lru.min@1.1.4:
+    optional: true
 
   lucide-react@0.469.0(react@19.2.7):
     dependencies:
@@ -16321,6 +16322,7 @@ snapshots:
       named-placeholders: 1.1.6
       seq-queue: 0.0.5
       sqlstring: 2.3.3
+    optional: true
 
   mz@2.7.0:
     dependencies:
@@ -16331,6 +16333,7 @@ snapshots:
   named-placeholders@1.1.6:
     dependencies:
       lru.min: 1.1.4
+    optional: true
 
   nan@2.25.0:
     optional: true
@@ -17519,7 +17522,8 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  seq-queue@0.0.5: {}
+  seq-queue@0.0.5:
+    optional: true
 
   serialize-error-cjs@0.1.4: {}
 
@@ -17746,7 +17750,8 @@ snapshots:
 
   sprintf-js@1.0.3: {}
 
-  sqlstring@2.3.3: {}
+  sqlstring@2.3.3:
+    optional: true
 
   ssh2@1.16.0:
     dependencies:

@@ -1,4 +1,5 @@
 import {
+	type AgentChannelCredentials,
 	apiAgentChat,
 	apiSaveAgent,
 	apiSaveAgentChannel,
@@ -17,7 +18,10 @@ import {
 } from "@dokploy/server/services/agent";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { reloadAgentGateways } from "@/server/agent/gateways";
+import {
+	getGatewayRuntime,
+	reloadAgentGateways,
+} from "@/server/agent/gateways";
 import { getDiscordBotInfo } from "@/server/agent/gateways/discord";
 import { verifyEmailChannel } from "@/server/agent/gateways/email";
 import { getSignalInfo } from "@/server/agent/gateways/signal";
@@ -65,6 +69,26 @@ const requireChannel = async (organizationId: string, channelId: string) => {
 	return { agent, channel };
 };
 
+const SECRET_CREDENTIAL_KEYS = [
+	"botToken",
+	"appToken",
+	"accessToken",
+	"verifyToken",
+	"imapPassword",
+	"smtpPassword",
+] as const;
+
+/** Secrets never leave the server; the UI only needs to know one is stored. */
+const redactCredentials = (credentials: AgentChannelCredentials) => {
+	const redacted = { ...credentials };
+	for (const key of SECRET_CREDENTIAL_KEYS) {
+		if (redacted[key]) {
+			redacted[key] = "__stored__";
+		}
+	}
+	return redacted;
+};
+
 const toTRPCError = (error: unknown) =>
 	new TRPCError({
 		code: "BAD_REQUEST",
@@ -94,7 +118,12 @@ export const agentRouter = createTRPCRouter({
 			ctx.session.activeOrganizationId,
 		);
 		if (!agent) return [];
-		return await findChannelsByAgentId(agent.agentId);
+		const channels = await findChannelsByAgentId(agent.agentId);
+		return channels.map((channel) => ({
+			...channel,
+			credentials: redactCredentials(channel.credentials),
+			runtime: getGatewayRuntime(channel.channelId),
+		}));
 	}),
 
 	saveChannel: adminProcedure

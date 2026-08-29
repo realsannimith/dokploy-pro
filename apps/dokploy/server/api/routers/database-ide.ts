@@ -1,24 +1,25 @@
-import { createServer, type Server as NetServer, type Socket } from "node:net";
+import { randomBytes } from "node:crypto";
+import { Writable } from "node:stream";
+import { finished } from "node:stream/promises";
 import {
 	findLibsqlById,
 	findMariadbById,
 	findMySqlById,
 	findPostgresById,
-	findServerById,
-	getServiceContainer,
+	getRemoteDocker,
 } from "@dokploy/server";
 import {
 	checkServiceAccess,
 	checkServicePermissionAndAccess,
 } from "@dokploy/server/services/permission";
 import { TRPCError } from "@trpc/server";
-import type { FieldPacket, ResultSetHeader } from "mysql2";
-import mysql from "mysql2/promise";
-import postgres from "postgres";
-import { Client } from "ssh2";
 import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "@/server/api/trpc";
 import { audit } from "@/server/api/utils/audit";
+import {
+	decodeDatabaseIdeMysqlField,
+	parseDatabaseIdeCsv,
+} from "@/server/api/utils/database-ide-output";
 
 const databaseTypeSchema = z.enum(["postgres", "mysql", "mariadb", "libsql"]);
 export type DatabaseIdeType = z.infer<typeof databaseTypeSchema>;
@@ -62,13 +63,7 @@ interface DatabaseServiceConnection {
 	type: DatabaseIdeType;
 }
 
-interface ConnectionTarget {
-	close: () => Promise<void>;
-	host: string;
-	port: number;
-}
-
-const noOpClose = async () => {};
+type DockerClient = Awaited<ReturnType<typeof getRemoteDocker>>;
 
 const getDatabaseService = async (
 	type: DatabaseIdeType,
@@ -149,7 +144,10 @@ const assertOrganizationAccess = (
 	}
 };
 
-const findContainerAddress = async (service: DatabaseServiceConnection) => {
+const findRunningContainer = async (
+	service: DatabaseServiceConnection,
+	docker?: DockerClient,
+) => {
 	if (service.status !== "done") {
 		throw new TRPCError({
 			code: "PRECONDITION_FAILED",
@@ -157,10 +155,14 @@ const findContainerAddress = async (service: DatabaseServiceConnection) => {
 		});
 	}
 
-	const container = await getServiceContainer(
-		service.appName,
-		service.serverId,
-	);
+	const client = docker ?? (await getRemoteDocker(service.serverId));
+	const containers = await client.listContainers({
+		filters: JSON.stringify({
+			label: [`com.docker.swarm.service.name=${service.appName}`],
+			status: ["running"],
+		}),
+	});
+	const container = containers[0];
 	if (!container) {
 		throw new TRPCError({
 			code: "PRECONDITION_FAILED",
@@ -168,144 +170,77 @@ const findContainerAddress = async (service: DatabaseServiceConnection) => {
 		});
 	}
 
-	const networks = container.NetworkSettings?.Networks ?? {};
-	const preferredNetwork = networks["dokploy-network"];
-	const address =
-		preferredNetwork?.IPAddress ||
-		Object.values(networks).find((network) => network.IPAddress)?.IPAddress;
-
-	if (!address) {
-		throw new TRPCError({
-			code: "INTERNAL_SERVER_ERROR",
-			message: "Could not resolve the private database address",
-		});
-	}
-
-	return address;
+	return container;
 };
 
-const createSshTunnel = async (
-	serverId: string,
-	targetHost: string,
-	targetPort: number,
-): Promise<ConnectionTarget> => {
-	const server = await findServerById(serverId);
-	if (!server.sshKey?.privateKey) {
-		throw new TRPCError({
-			code: "PRECONDITION_FAILED",
-			message: "The remote server does not have an SSH key configured",
-		});
-	}
+interface ContainerCommandOptions {
+	cmd: string[];
+	env?: string[];
+	input?: string;
+}
 
-	const client = new Client();
-	await new Promise<void>((resolve, reject) => {
-		client.once("ready", resolve).once("error", reject).connect({
-			host: server.ipAddress,
-			port: server.port,
-			username: server.username,
-			privateKey: server.sshKey?.privateKey,
-			readyTimeout: 15_000,
-		});
-	});
-
-	const sockets = new Set<Socket>();
-	const tunnel = createServer((socket) => {
-		sockets.add(socket);
-		socket.once("close", () => sockets.delete(socket));
-
-		client.forwardOut(
-			"127.0.0.1",
-			0,
-			targetHost,
-			targetPort,
-			(error, stream) => {
-				if (error) {
-					socket.destroy(error);
-					return;
-				}
-				socket.pipe(stream).pipe(socket);
-			},
-		);
-	});
-
-	try {
-		await new Promise<void>((resolve, reject) => {
-			tunnel.once("error", reject);
-			tunnel.listen(0, "127.0.0.1", () => {
-				tunnel.removeListener("error", reject);
-				resolve();
-			});
-		});
-	} catch (error) {
-		client.end();
-		throw error;
-	}
-
-	const address = tunnel.address();
-	if (!address || typeof address === "string") {
-		await closeTunnel(tunnel, client, sockets);
-		throw new TRPCError({
-			code: "INTERNAL_SERVER_ERROR",
-			message: "Could not create a secure database tunnel",
-		});
-	}
-
-	return {
-		host: "127.0.0.1",
-		port: address.port,
-		close: () => closeTunnel(tunnel, client, sockets),
-	};
-};
-
-const closeTunnel = async (
-	tunnel: NetServer,
-	client: Client,
-	sockets: Set<Socket>,
-) => {
-	for (const socket of sockets) socket.destroy();
-	await new Promise<void>((resolve) => tunnel.close(() => resolve()));
-	client.end();
-};
-
-const getConnectionTarget = async (
+const runContainerCommand = async (
 	service: DatabaseServiceConnection,
-): Promise<ConnectionTarget> => {
-	const host = await findContainerAddress(service);
-	const port =
-		service.type === "postgres"
-			? 5432
-			: service.type === "libsql"
-				? 8080
-				: 3306;
+	options: ContainerCommandOptions,
+) => {
+	const docker = await getRemoteDocker(service.serverId);
+	const containerInfo = await findRunningContainer(service, docker);
+	const exec = await docker.getContainer(containerInfo.Id).exec({
+		AttachStderr: true,
+		AttachStdin: options.input !== undefined,
+		AttachStdout: true,
+		Cmd: options.cmd,
+		Env: options.env,
+		Tty: false,
+	});
+	const stream = await exec.start({
+		hijack: true,
+		stdin: options.input !== undefined,
+	});
 
-	if (service.serverId) {
-		return createSshTunnel(service.serverId, host, port);
-	}
+	const stdoutChunks: Buffer[] = [];
+	const stderrChunks: Buffer[] = [];
+	const stdout = new Writable({
+		write(chunk: Buffer, _encoding, callback) {
+			stdoutChunks.push(Buffer.from(chunk));
+			callback();
+		},
+	});
+	const stderr = new Writable({
+		write(chunk: Buffer, _encoding, callback) {
+			stderrChunks.push(Buffer.from(chunk));
+			callback();
+		},
+	});
+	docker.modem.demuxStream(stream, stdout, stderr);
 
-	return { host, port, close: noOpClose };
-};
+	if (options.input !== undefined) stream.end(options.input);
 
-const toCellValue = (value: unknown): CellValue => {
-	if (value === null || value === undefined) return null;
-	if (
-		typeof value === "string" ||
-		typeof value === "number" ||
-		typeof value === "boolean"
-	) {
-		return value;
-	}
-	if (typeof value === "bigint") return value.toString();
-	if (value instanceof Date) return value.toISOString();
-	if (Buffer.isBuffer(value)) return `\\x${value.toString("hex")}`;
-
+	let timer: NodeJS.Timeout | undefined;
 	try {
-		const serialized = JSON.stringify(value, (_key, nestedValue) =>
-			typeof nestedValue === "bigint" ? nestedValue.toString() : nestedValue,
-		);
-		return serialized ?? String(value);
-	} catch {
-		return String(value);
+		await Promise.race([
+			finished(stream),
+			new Promise<never>((_resolve, reject) => {
+				timer = setTimeout(() => {
+					stream.destroy();
+					reject(new Error("The database query timed out after 30 seconds"));
+				}, QUERY_TIMEOUT_MS + 5_000);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
 	}
+
+	const result = await exec.inspect();
+	const stdoutText = Buffer.concat(stdoutChunks).toString("utf8");
+	const stderrText = Buffer.concat(stderrChunks).toString("utf8");
+	if (result.ExitCode !== 0) {
+		throw new Error(
+			stderrText.trim() || stdoutText.trim() || "The database query failed",
+		);
+	}
+
+	return { stdout: stdoutText, stderr: stderrText };
 };
 
 const uniqueHeaders = (
@@ -324,125 +259,176 @@ const uniqueHeaders = (
 	});
 };
 
+const ensureTerminatedStatement = (statement: string) => {
+	const trimmed = statement.trim();
+	return trimmed.endsWith(";") ? trimmed : `${trimmed};`;
+};
+
+const commandFromStatement = (statement: string) =>
+	/^\s*([a-z]+)/i.exec(statement)?.[1]?.toUpperCase() || "QUERY";
+
+const assertNoNativeClientCommands = (
+	statement: string,
+	type: DatabaseIdeType,
+) => {
+	if (type === "libsql") return;
+	if (/^\s*\\/m.test(statement)) {
+		throw new Error(
+			"Database client meta-commands are not supported in the IDE",
+		);
+	}
+	if (
+		type !== "postgres" &&
+		/^\s*(delimiter|source|system|tee|notee|pager|nopager|edit|connect|quit|exit)\b/im.test(
+			statement,
+		)
+	) {
+		throw new Error("Database client commands are not supported in the IDE");
+	}
+};
+
 const runPostgresQuery = async (
 	service: DatabaseServiceConnection,
-	target: ConnectionTarget,
 	statement: string,
 	maxRows: number,
 ): Promise<QueryResult> => {
 	const startedAt = performance.now();
-	const sql = postgres({
-		host: target.host,
-		port: target.port,
-		database: service.databaseName,
-		username: service.databaseUser,
-		password: service.databasePassword,
-		max: 1,
-		connect_timeout: 10,
-		idle_timeout: 5,
-		prepare: false,
-		onnotice: () => {},
+	const marker = `__DOKPLOY_META_${randomBytes(16).toString("hex")}__`;
+	const nullMarker = `__DOKPLOY_NULL_${randomBytes(16).toString("hex")}__`;
+	const { stdout } = await runContainerCommand(service, {
+		cmd: [
+			"psql",
+			"--no-psqlrc",
+			"--csv",
+			"--quiet",
+			"--set",
+			"ON_ERROR_STOP=1",
+			`--pset=null=${nullMarker}`,
+			"--username",
+			service.databaseUser,
+			"--dbname",
+			service.databaseName,
+		],
+		env: [
+			`PGPASSWORD=${service.databasePassword}`,
+			`PGOPTIONS=-c statement_timeout=${QUERY_TIMEOUT_MS}`,
+		],
+		input: `${ensureTerminatedStatement(statement)}\n\\echo ${marker} :ROW_COUNT :SQLSTATE\n`,
 	});
 
-	try {
-		await sql`select set_config('statement_timeout', ${String(QUERY_TIMEOUT_MS)}, false)`;
-		const result = await sql.unsafe(statement).values();
-		const truncated = result.length > maxRows;
-		const rawRows = result.slice(0, maxRows);
-		const headers = uniqueHeaders(
-			result.columns.map((column) => ({
-				displayName: column.name,
-				type: String(column.type),
-			})),
-		);
-		const rows = rawRows.map((row) =>
+	const markerIndex = Math.max(
+		stdout.lastIndexOf(`\n${marker} `),
+		stdout.startsWith(`${marker} `) ? 0 : -1,
+	);
+	if (markerIndex < 0) {
+		throw new Error("PostgreSQL did not return a complete query result");
+	}
+	const metadata = stdout
+		.slice(markerIndex + (stdout[markerIndex] === "\n" ? 1 : 0))
+		.trim()
+		.split(/\s+/);
+	const csv = stdout.slice(0, markerIndex).replace(/\n$/, "");
+	const parsed = parseDatabaseIdeCsv(csv);
+	const rawHeaders = parsed[0] ?? [];
+	const headers = uniqueHeaders(
+		rawHeaders.map((name, index) => ({
+			displayName: name || `column_${index + 1}`,
+			type: "text",
+		})),
+	);
+	const rawRows = parsed.slice(1);
+	const rows = rawRows
+		.slice(0, maxRows)
+		.map((row) =>
 			Object.fromEntries(
-				headers.map((header, index) => [header.name, toCellValue(row[index])]),
+				headers.map((header, index) => [
+					header.name,
+					row[index] === nullMarker ? null : (row[index] ?? null),
+				]),
 			),
 		);
 
-		return {
-			headers,
-			rows,
-			rowsAffected: result.count ?? rows.length,
-			durationMs: Math.round(performance.now() - startedAt),
-			command: result.command || "QUERY",
-			truncated,
-		};
-	} finally {
-		await sql.end({ timeout: 2 });
-	}
+	const rowsAffected = Number(metadata[1]);
+	return {
+		headers,
+		rows,
+		rowsAffected: Number.isFinite(rowsAffected) ? rowsAffected : rows.length,
+		durationMs: Math.round(performance.now() - startedAt),
+		command: commandFromStatement(statement),
+		truncated: rawRows.length > maxRows,
+	};
 };
 
 const runMysqlQuery = async (
 	service: DatabaseServiceConnection,
-	target: ConnectionTarget,
 	statement: string,
 	maxRows: number,
 ): Promise<QueryResult> => {
 	const startedAt = performance.now();
-	const connection = await mysql.createConnection({
-		host: target.host,
-		port: target.port,
-		database: service.databaseName,
-		user: service.databaseUser,
-		password: service.databasePassword,
-		connectTimeout: 10_000,
-		dateStrings: true,
-		rowsAsArray: true,
-		supportBigNumbers: true,
-		bigNumberStrings: true,
+	const marker = `__DOKPLOY_META_${randomBytes(16).toString("hex")}__`;
+	const timeoutStatement =
+		service.type === "mariadb"
+			? `SET SESSION max_statement_time=${QUERY_TIMEOUT_MS / 1000};`
+			: `SET SESSION MAX_EXECUTION_TIME=${QUERY_TIMEOUT_MS};`;
+	const { stdout } = await runContainerCommand(service, {
+		cmd: [
+			service.type === "mariadb" ? "mariadb" : "mysql",
+			"--batch",
+			"--binary-mode",
+			...(service.type === "mysql" ? ["--binary-as-hex"] : []),
+			"--connect-timeout=10",
+			"--default-character-set=utf8mb4",
+			"--quick",
+			`--user=${service.databaseUser}`,
+			`--database=${service.databaseName}`,
+		],
+		env: [`MYSQL_PWD=${service.databasePassword}`],
+		input: `${timeoutStatement}\n${ensureTerminatedStatement(statement)}\nSELECT '${marker}' AS __dokploy_meta__, ROW_COUNT() AS affected_rows;\n`,
 	});
 
-	try {
-		await connection.query("SET SESSION SQL_SELECT_LIMIT = ?", [maxRows + 1]);
-		const [rawRows, fields] = await connection.query({
-			sql: statement,
-			timeout: QUERY_TIMEOUT_MS,
-			rowsAsArray: true,
-		});
-
-		if (!Array.isArray(rawRows)) {
-			const result = rawRows as ResultSetHeader;
-			return {
-				headers: [],
-				rows: [],
-				rowsAffected: result.affectedRows ?? 0,
-				durationMs: Math.round(performance.now() - startedAt),
-				command: "QUERY",
-				truncated: false,
-			};
+	const lines = stdout.replaceAll("\r\n", "\n").trimEnd().split("\n");
+	let markerIndex = -1;
+	for (let index = lines.length - 1; index >= 0; index -= 1) {
+		if (lines[index]?.startsWith(`${marker}\t`)) {
+			markerIndex = index;
+			break;
 		}
-
-		const headers = uniqueHeaders(
-			(fields as FieldPacket[]).map((field) => ({
-				displayName: field.name,
-				type: String(field.type),
-			})),
-		);
-		const truncated = rawRows.length > maxRows;
-		const rows = (rawRows as unknown[][])
-			.slice(0, maxRows)
-			.map((row) =>
-				Object.fromEntries(
-					headers.map((header, index) => [
-						header.name,
-						toCellValue(row[index]),
-					]),
-				),
-			);
-
-		return {
-			headers,
-			rows,
-			rowsAffected: rows.length,
-			durationMs: Math.round(performance.now() - startedAt),
-			command: "SELECT",
-			truncated,
-		};
-	} finally {
-		await connection.end();
 	}
+	if (markerIndex < 1) {
+		throw new Error("MySQL did not return a complete query result");
+	}
+	const metadata = lines[markerIndex]?.split("\t") ?? [];
+	const resultLines = lines.slice(0, markerIndex - 1);
+	const rawHeaders = resultLines[0]?.split("\t") ?? [];
+	const headers = uniqueHeaders(
+		rawHeaders.map((name, index) => ({
+			displayName: String(
+				decodeDatabaseIdeMysqlField(name) ?? `column_${index + 1}`,
+			),
+			type: "text",
+		})),
+	);
+	const rawRows = resultLines.slice(1).map((line) => line.split("\t"));
+	const rows = rawRows
+		.slice(0, maxRows)
+		.map((row) =>
+			Object.fromEntries(
+				headers.map((header, index) => [
+					header.name,
+					decodeDatabaseIdeMysqlField(row[index]),
+				]),
+			),
+		);
+
+	const rowsAffected = Number(decodeDatabaseIdeMysqlField(metadata[1]));
+	return {
+		headers,
+		rows,
+		rowsAffected: Number.isFinite(rowsAffected) ? rowsAffected : rows.length,
+		durationMs: Math.round(performance.now() - startedAt),
+		command: commandFromStatement(statement),
+		truncated: rawRows.length > maxRows,
+	};
 };
 
 interface LibsqlValue {
@@ -456,6 +442,15 @@ interface LibsqlStatementResult {
 	cols?: Array<{ name: string | null }>;
 	rows?: LibsqlValue[][];
 }
+
+const LIBSQL_HTTP_COMMAND = [
+	"set -e",
+	"body=$(cat)",
+	"exec 3<>/dev/tcp/127.0.0.1/8080",
+	'printf \'POST /v1/execute HTTP/1.0\\r\\nHost: 127.0.0.1:8080\\r\\nAuthorization: Basic %s\\r\\nContent-Type: application/json\\r\\nContent-Length: %s\\r\\nConnection: close\\r\\n\\r\\n\' "$DOKPLOY_BASIC_AUTH" "${#body}" >&3',
+	"printf '%s' \"$body\" >&3",
+	"cat <&3",
+].join("\n");
 
 const fromLibsqlValue = (value: LibsqlValue | undefined): CellValue => {
 	if (!value || value.type === "null") return null;
@@ -473,32 +468,32 @@ const fromLibsqlValue = (value: LibsqlValue | undefined): CellValue => {
 
 const runLibsqlQuery = async (
 	service: DatabaseServiceConnection,
-	target: ConnectionTarget,
 	statement: string,
 	maxRows: number,
 ): Promise<QueryResult> => {
 	const startedAt = performance.now();
-	const response = await fetch(
-		`http://${target.host}:${target.port}/v1/execute`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Basic ${Buffer.from(
-					`${service.databaseUser}:${service.databasePassword}`,
-				).toString("base64")}`,
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({ stmt: { sql: statement, want_rows: true } }),
-			signal: AbortSignal.timeout(QUERY_TIMEOUT_MS),
-		},
-	);
-
-	const body = (await response.json().catch(() => null)) as {
+	const { stdout } = await runContainerCommand(service, {
+		cmd: ["bash", "-c", LIBSQL_HTTP_COMMAND],
+		env: [
+			`DOKPLOY_BASIC_AUTH=${Buffer.from(
+				`${service.databaseUser}:${service.databasePassword}`,
+			).toString("base64")}`,
+			"LC_ALL=C",
+		],
+		input: JSON.stringify({ stmt: { sql: statement, want_rows: true } }),
+	});
+	const headerEnd = stdout.indexOf("\r\n\r\n");
+	if (headerEnd < 0) {
+		throw new Error("LibSQL did not return a complete HTTP response");
+	}
+	const statusLine = stdout.slice(0, stdout.indexOf("\r\n"));
+	const statusCode = Number(statusLine.split(" ")[1]);
+	const body = JSON.parse(stdout.slice(headerEnd + 4)) as {
 		message?: string;
 		result?: LibsqlStatementResult;
-	} | null;
-	if (!response.ok || !body?.result) {
-		throw new Error(body?.message || `LibSQL returned HTTP ${response.status}`);
+	};
+	if (statusCode < 200 || statusCode >= 300 || !body.result) {
+		throw new Error(body.message || `LibSQL returned HTTP ${statusCode}`);
 	}
 
 	const rawRows = body.result.rows ?? [];
@@ -524,7 +519,7 @@ const runLibsqlQuery = async (
 		rows,
 		rowsAffected: body.result.affected_row_count ?? rows.length,
 		durationMs: Math.round(performance.now() - startedAt),
-		command: /^\s*([a-z]+)/i.exec(statement)?.[1]?.toUpperCase() || "QUERY",
+		command: commandFromStatement(statement),
 		truncated: rawRows.length > maxRows,
 	};
 };
@@ -534,18 +529,15 @@ const runDatabaseQuery = async (
 	statement: string,
 	maxRows = MAX_RESULT_ROWS,
 ): Promise<QueryResult> => {
-	const target = await getConnectionTarget(service);
-	try {
-		if (service.type === "postgres") {
-			return await runPostgresQuery(service, target, statement, maxRows);
-		}
-		if (service.type === "libsql") {
-			return await runLibsqlQuery(service, target, statement, maxRows);
-		}
-		return await runMysqlQuery(service, target, statement, maxRows);
-	} finally {
-		await target.close();
+	assertNoNativeClientCommands(statement, service.type);
+	if (service.type === "postgres") {
+		return runPostgresQuery(service, statement, maxRows);
 	}
+	if (service.type !== "libsql") {
+		return runMysqlQuery(service, statement, maxRows);
+	}
+
+	return runLibsqlQuery(service, statement, maxRows);
 };
 
 const schemaStatement = (type: DatabaseIdeType) => {
@@ -645,7 +637,12 @@ const loadSchema = async (service: DatabaseServiceConnection) => {
 				dataType: String(row.dataType ?? "unknown"),
 				defaultValue: row.defaultValue ?? null,
 				name: String(row.column),
-				nullable: row.nullable === true || row.nullable === 1,
+				nullable:
+					row.nullable === true ||
+					row.nullable === 1 ||
+					row.nullable === "1" ||
+					row.nullable === "t" ||
+					row.nullable === "true",
 			});
 		}
 	}

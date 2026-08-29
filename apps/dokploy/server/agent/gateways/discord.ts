@@ -44,6 +44,7 @@ export const startDiscord = ({
 	channelId,
 	agentId,
 	credentials,
+	onFatal,
 }: GatewayStartInput): GatewayHandle => {
 	const token = credentials.botToken || "";
 	let stopped = false;
@@ -113,6 +114,9 @@ export const startDiscord = ({
 			if (code === 4004) {
 				console.error(
 					`[agent-gateway] Discord token rejected for channel ${channelId}`,
+				);
+				onFatal?.(
+					"Discord rejected the bot token. Save a valid token to restart the gateway.",
 				);
 				return;
 			}

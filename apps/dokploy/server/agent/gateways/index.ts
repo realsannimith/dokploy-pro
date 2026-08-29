@@ -21,14 +21,27 @@ const STARTERS: Partial<Record<string, GatewayStarter>> = {
 	email: startEmail,
 };
 
+export interface GatewayRuntime {
+	state: "running" | "stopped" | "error";
+	message?: string;
+}
+
 // Survives Next.js dev-mode module reloads.
 const globalStore = globalThis as unknown as {
 	__dokployAgentGateways?: Map<string, GatewayHandle>;
+	__dokployAgentGatewayRuntime?: Map<string, GatewayRuntime>;
 };
 if (!globalStore.__dokployAgentGateways) {
 	globalStore.__dokployAgentGateways = new Map();
 }
+if (!globalStore.__dokployAgentGatewayRuntime) {
+	globalStore.__dokployAgentGatewayRuntime = new Map();
+}
 const running = globalStore.__dokployAgentGateways;
+const runtime = globalStore.__dokployAgentGatewayRuntime;
+
+export const getGatewayRuntime = (channelId: string): GatewayRuntime =>
+	runtime.get(channelId) ?? { state: "stopped" };
 
 export const stopChannel = (channelId: string) => {
 	const handle = running.get(channelId);
@@ -36,6 +49,7 @@ export const stopChannel = (channelId: string) => {
 		handle.stop();
 		running.delete(channelId);
 	}
+	runtime.delete(channelId);
 };
 
 export const stopAllChannels = () => {
@@ -58,15 +72,21 @@ const startChannel = (channel: {
 			channelId: channel.channelId,
 			agentId: channel.agentId,
 			credentials: channel.credentials,
+			onFatal: (message) => {
+				runtime.set(channel.channelId, { state: "error", message });
+			},
 		});
 		running.set(channel.channelId, handle);
+		runtime.set(channel.channelId, { state: "running" });
 		console.log(
 			`[agent-gateway] ${channel.type} gateway started (${channel.channelId})`,
 		);
 	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		runtime.set(channel.channelId, { state: "error", message });
 		console.error(
 			`[agent-gateway] Failed to start ${channel.type} gateway:`,
-			error instanceof Error ? error.message : error,
+			message,
 		);
 	}
 };

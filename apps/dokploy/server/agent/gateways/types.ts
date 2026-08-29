@@ -8,6 +8,8 @@ export interface GatewayStartInput {
 	channelId: string;
 	agentId: string;
 	credentials: AgentChannelCredentials;
+	/** Report a fatal, non-retryable exit (e.g. rejected token) so the UI can show it. */
+	onFatal?: (message: string) => void;
 }
 
 export type GatewayStarter = (input: GatewayStartInput) => GatewayHandle;
