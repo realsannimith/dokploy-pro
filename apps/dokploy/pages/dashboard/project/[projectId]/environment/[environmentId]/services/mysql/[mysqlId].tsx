@@ -67,7 +67,10 @@ const MySql = (
 	const router = useRouter();
 	const { projectId, environmentId } = router.query;
 	const [tab, setSab] = useState<TabState>(activeTab);
-	const { data } = api.mysql.one.useQuery({ mysqlId });
+	const { data } = api.mysql.one.useQuery(
+		{ mysqlId },
+		{ refetchInterval: 5_000 },
+	);
 	const { data: auth } = api.user.get.useQuery();
 	const { data: permissions } = api.user.getPermissions.useQuery();
 
@@ -247,6 +250,7 @@ const MySql = (
 											<DatabaseIde
 												databaseId={mysqlId}
 												databaseType="mysql"
+												runtime={data?.runtime}
 												status={data?.applicationStatus}
 												canExecute={Boolean(permissions?.service.create)}
 											/>

@@ -161,13 +161,6 @@ const findRunningContainer = async (
 	service: DatabaseServiceConnection,
 	docker?: DockerClient,
 ) => {
-	if (service.status !== "done") {
-		throw new TRPCError({
-			code: "PRECONDITION_FAILED",
-			message: "Deploy and start the database before opening the IDE",
-		});
-	}
-
 	const client = docker ?? (await getRemoteDocker(service.serverId));
 	try {
 		return await waitForDatabaseServiceRunning(
@@ -175,7 +168,8 @@ const findRunningContainer = async (
 			service.serverId,
 			{
 				docker: client,
-				timeoutMs: 10_000,
+				requiredConsecutiveRunningChecks: 1,
+				timeoutMs: 30_000,
 			},
 		);
 	} catch (error) {

@@ -67,7 +67,10 @@ const Libsql = (
 	const router = useRouter();
 	const { projectId, environmentId } = router.query;
 	const [tab, setSab] = useState<TabState>(activeTab);
-	const { data } = api.libsql.one.useQuery({ libsqlId });
+	const { data } = api.libsql.one.useQuery(
+		{ libsqlId },
+		{ refetchInterval: 5_000 },
+	);
 	const { data: auth } = api.user.get.useQuery();
 	const { data: permissions } = api.user.getPermissions.useQuery();
 
@@ -227,6 +230,7 @@ const Libsql = (
 											canExecute={permissions?.service.create === true}
 											databaseId={libsqlId}
 											databaseType="libsql"
+											runtime={data?.runtime}
 											status={data?.applicationStatus}
 										/>
 									</TabsContent>

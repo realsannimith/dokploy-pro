@@ -349,7 +349,8 @@ const summarizeServices = (environment: Record<string, any>) => {
 				serviceType: type,
 				serviceId: service[serviceIdField[type]],
 				name: service.name,
-				status: service.applicationStatus ?? service.composeStatus,
+				deploymentStatus: service.applicationStatus ?? service.composeStatus,
+				statusSource: "stored",
 			});
 		}
 	}
@@ -679,7 +680,7 @@ export const buildAgentTools = (
 		}),
 		listProjects: tool({
 			description:
-				"List every project with its environments and services (name, id, type, status). Use this first to find the service the user is talking about.",
+				"List every project with its environments and services (name, id, type and stored deployment status). Use this first to find the service the user is talking about, then call getService for live database runtime state before saying it is working.",
 			inputSchema: z.object({}),
 			execute: async () => {
 				try {
@@ -703,7 +704,7 @@ export const buildAgentTools = (
 		}),
 		getService: tool({
 			description:
-				"Get details for one service: status, app name, server, domains, configured backups and their cron schedules. Environment variables are intentionally not included.",
+				"Get details for one service: current status, app name, server, domains, configured backups and their cron schedules. Database responses include both deploymentStatus (stored lifecycle) and runtime (live Docker truth); only runtime.ready=true proves the database is working. Environment variables are intentionally not included.",
 			inputSchema: z.object({
 				serviceType: serviceTypeSchema,
 				serviceId: z
@@ -720,6 +721,8 @@ export const buildAgentTools = (
 							"description",
 							"applicationStatus",
 							"composeStatus",
+							"deploymentStatus",
+							"runtime",
 							"serverId",
 							"createdAt",
 							"sourceType",
@@ -742,7 +745,7 @@ export const buildAgentTools = (
 		}),
 		deployService: tool({
 			description:
-				"Trigger a deployment for a service. For applications/compose this queues a build+deploy (visible in the dashboard's deployments tab). For databases this waits until Docker confirms that the container is running.",
+				"Trigger a deployment for a service. For applications/compose this queues a build+deploy (visible in the dashboard's deployments tab). For databases this requires multiple stable Docker running checks and then returns fresh runtime state.",
 			inputSchema: z.object({
 				serviceType: serviceTypeSchema,
 				serviceId: z.string(),
@@ -768,11 +771,24 @@ export const buildAgentTools = (
 							await deployDatabase(serviceType, serviceId);
 							break;
 					}
-					return toResult(
-						serviceType === "application" || serviceType === "compose"
-							? "Deployment queued. Use listDeployments to check its status."
-							: "Database deployment verified: its container is running.",
-					);
+					if (serviceType === "application" || serviceType === "compose") {
+						return toResult(
+							"Deployment queued. Use listDeployments to check its status.",
+						);
+					}
+					const service = (await getService(serviceType, serviceId)) as any;
+					return toResult({
+						message: service.runtime?.ready
+							? "Database deployment verified: its container is stably running."
+							: "Deployment finished, but the database is not currently ready.",
+						deploymentStatus:
+							service.deploymentStatus ?? service.applicationStatus,
+						runtime: service.runtime ?? {
+							state: "unknown",
+							ready: false,
+							message: "Live runtime status was not returned",
+						},
+					});
 				} catch (error) {
 					return toErrorResult(error);
 				}
@@ -1300,8 +1316,19 @@ export const buildAgentTools = (
 					}
 
 					let deploymentError: string | undefined;
+					let runtime: Record<string, unknown> | undefined;
 					try {
 						await deployDatabase(databaseType, serviceId);
+						const verifiedService = (await getService(
+							databaseType,
+							serviceId,
+						)) as any;
+						runtime = verifiedService.runtime;
+						if (runtime?.ready !== true) {
+							throw new Error(
+								`Live database verification returned ${String(runtime?.state ?? "unknown")}: ${String(runtime?.message ?? "runtime status unavailable")}`,
+							);
+						}
 					} catch (error) {
 						deploymentError =
 							error instanceof Error ? error.message : String(error);
@@ -1327,6 +1354,12 @@ export const buildAgentTools = (
 						},
 						deployed: !deploymentError,
 						status: deploymentError ? "error" : "running",
+						runtime: runtime ?? {
+							state: "unknown",
+							ready: false,
+							message:
+								deploymentError ?? "Live runtime status was not returned",
+						},
 						...(deploymentError ? { deploymentError } : {}),
 						next: deploymentError
 							? "The record and credentials were created, but deployment failed. Inspect the reported Swarm task error before retrying deployService."

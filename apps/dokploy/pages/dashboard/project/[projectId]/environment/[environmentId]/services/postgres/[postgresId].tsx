@@ -67,7 +67,10 @@ const Postgresql = (
 	const router = useRouter();
 	const { projectId, environmentId } = router.query;
 	const [tab, setSab] = useState<TabState>(activeTab);
-	const { data } = api.postgres.one.useQuery({ postgresId });
+	const { data } = api.postgres.one.useQuery(
+		{ postgresId },
+		{ refetchInterval: 5_000 },
+	);
 	const { data: auth } = api.user.get.useQuery();
 	const { data: permissions } = api.user.getPermissions.useQuery();
 
@@ -252,6 +255,7 @@ const Postgresql = (
 										<DatabaseIde
 											databaseId={postgresId}
 											databaseType="postgres"
+											runtime={data?.runtime}
 											status={data?.applicationStatus}
 											canExecute={Boolean(permissions?.service.create)}
 										/>

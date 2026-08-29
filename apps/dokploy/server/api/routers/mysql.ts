@@ -35,6 +35,7 @@ import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "@/server/api/trpc";
 import { audit } from "@/server/api/utils/audit";
+import { withDatabaseRuntime } from "@/server/api/utils/database-runtime";
 import { redactServiceMonitoringToken } from "@/server/api/utils/monitoring";
 import {
 	apiChangeMySqlStatus,
@@ -137,7 +138,7 @@ export const mysqlRouter = createTRPCRouter({
 					message: "You are not authorized to access this MySQL",
 				});
 			}
-			return redactServiceMonitoringToken(mysql);
+			return redactServiceMonitoringToken(await withDatabaseRuntime(mysql));
 		}),
 
 	start: protectedProcedure

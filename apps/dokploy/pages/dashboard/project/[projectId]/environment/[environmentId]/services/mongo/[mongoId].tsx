@@ -59,7 +59,10 @@ const Mongo = (
 	const router = useRouter();
 	const { projectId, environmentId } = router.query;
 	const [tab, setSab] = useState<TabState>(activeTab);
-	const { data } = api.mongo.one.useQuery({ mongoId });
+	const { data } = api.mongo.one.useQuery(
+		{ mongoId },
+		{ refetchInterval: 5_000 },
+	);
 
 	const { data: auth } = api.user.get.useQuery();
 	const { data: permissions } = api.user.getPermissions.useQuery();

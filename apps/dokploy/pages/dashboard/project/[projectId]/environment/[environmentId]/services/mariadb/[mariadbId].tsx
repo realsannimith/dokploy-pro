@@ -68,7 +68,10 @@ const Mariadb = (
 	const router = useRouter();
 	const { projectId, environmentId } = router.query;
 	const [tab, setSab] = useState<TabState>(activeTab);
-	const { data } = api.mariadb.one.useQuery({ mariadbId });
+	const { data } = api.mariadb.one.useQuery(
+		{ mariadbId },
+		{ refetchInterval: 5_000 },
+	);
 	const { data: auth } = api.user.get.useQuery();
 	const { data: permissions } = api.user.getPermissions.useQuery();
 
@@ -247,6 +250,7 @@ const Mariadb = (
 										<DatabaseIde
 											databaseId={mariadbId}
 											databaseType="mariadb"
+											runtime={data?.runtime}
 											status={data?.applicationStatus}
 											canExecute={Boolean(permissions?.service.create)}
 										/>

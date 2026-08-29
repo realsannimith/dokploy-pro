@@ -48,6 +48,11 @@ interface DatabaseIdeProps {
 	canExecute: boolean;
 	databaseId: string;
 	databaseType: DatabaseType;
+	runtime?: {
+		state: "running" | "starting" | "failed" | "stopped" | "unknown";
+		ready: boolean;
+		message: string;
+	};
 	status: "idle" | "running" | "done" | "error" | undefined;
 }
 
@@ -83,6 +88,7 @@ export const DatabaseIde = ({
 	canExecute,
 	databaseId,
 	databaseType,
+	runtime,
 	status,
 }: DatabaseIdeProps) => {
 	const [search, setSearch] = useState("");
@@ -299,6 +305,16 @@ export const DatabaseIde = ({
 	};
 
 	if (status !== "done") {
+		const title =
+			runtime?.state === "starting"
+				? "Database is still starting"
+				: runtime?.state === "failed"
+					? "Database failed to start"
+					: runtime?.state === "stopped"
+						? "Database is stopped"
+						: runtime?.state === "unknown"
+							? "Database status is unavailable"
+							: "Database IDE will be ready after deployment";
 		return (
 			<div className="mt-2.5 flex min-h-[420px] items-center justify-center rounded-xl border-2 border-dashed p-6">
 				<div className="flex max-w-lg flex-col items-center gap-3 text-center">
@@ -306,13 +322,16 @@ export const DatabaseIde = ({
 						<Database className="size-6 text-muted-foreground" />
 					</div>
 					<div>
-						<h3 className="font-medium">
-							Database IDE will be ready after deployment
-						</h3>
+						<h3 className="font-medium">{title}</h3>
 						<p className="mt-1 text-sm text-muted-foreground">
-							Deploy and start this database, then return here to browse its
-							tables and run queries.
+							{runtime?.message ||
+								"Deploy and start this database, then return here to browse its tables and run queries."}
 						</p>
+						{runtime && (
+							<Badge variant="outline" className="capitalize">
+								Live status: {runtime.state}
+							</Badge>
+						)}
 					</div>
 				</div>
 			</div>
