@@ -76,6 +76,7 @@ export const agentConversationSource = pgEnum("agentConversationSource", [
 	"whatsapp",
 	"signal",
 	"email",
+	"terminal",
 	"web",
 ]);
 

@@ -23,6 +23,10 @@ const APPROVAL_GUIDANCE = `- Approval-gated tools (deleting anything, and any di
 - Once a tool reports that a confirmation request was sent, stop and say in one line what will happen when they tap Approve. Never call the tool again while its prompt is unanswered.
 - Non-gated actions that look production-critical (stopping a service, redeploying) still deserve a brief check with the user unless they clearly asked for it.`;
 
+const INLINE_APPROVAL_GUIDANCE = `- Approval-gated tools pause and show an interactive confirmation in this terminal. When the user requested the action, gather the ids you need and call the tool straight away; never ask for confirmation in a separate message first.
+- If the user approves, the tool returns its execution result in the same turn. Continue with any justified verification and summarize the outcome. If they reject it, acknowledge that nothing changed.
+- Non-gated actions that look production-critical (stopping a service, redeploying) still deserve a brief check with the user unless they clearly asked for it.`;
+
 const SELF_CONFIRM_GUIDANCE = `- Before stopping services or triggering deployments of something that looks production-critical, briefly confirm with the user unless they clearly asked for it.
 - Deleting a service is irreversible: always ask the user to explicitly confirm (by name) before calling deleteService.`;
 
@@ -30,13 +34,16 @@ const buildSystemPrompt = (
 	agentName: string,
 	source: AgentSource,
 	instructions?: string | null,
-	hasConfirmationButtons?: boolean,
+	confirmationMode?: "none" | "deferred" | "inline",
 	skillIndex?: string,
 	memoryIndex?: string,
 ) => {
-	const confirmationGuidance = hasConfirmationButtons
-		? APPROVAL_GUIDANCE
-		: SELF_CONFIRM_GUIDANCE;
+	const confirmationGuidance =
+		confirmationMode === "inline"
+			? INLINE_APPROVAL_GUIDANCE
+			: confirmationMode === "deferred"
+				? APPROVAL_GUIDANCE
+				: SELF_CONFIRM_GUIDANCE;
 	const base = `You are ${agentName}, the AI operations assistant for a Dokploy instance (an open-source PaaS for deploying applications, docker compose stacks and databases).
 
 You are talking to an authorized administrator of this Dokploy instance, possibly through a chat app like Telegram. Help them inspect and operate their infrastructure using your tools.
@@ -83,6 +90,8 @@ export interface RunAgentInput {
 	externalChatId?: string;
 	/** Gateway-provided handler that shows Approve/Reject buttons to the user. */
 	confirmation?: AgentConfirmationHandler;
+	/** Lets an interactive surface interrupt a model request with Ctrl+C. */
+	abortSignal?: AbortSignal;
 	onProgress?: (progress: {
 		step: number;
 		toolName: string;
@@ -168,12 +177,13 @@ export const runAgent = async (
 			agent.name,
 			input.source,
 			agent.instructions,
-			!!input.confirmation,
+			input.confirmation?.mode ?? (input.confirmation ? "deferred" : "none"),
 			formatSkillIndex(skills),
 			memories.map((memory) => `- ${memory.key}: ${memory.content}`).join("\n"),
 		),
 		messages,
 		tools,
+		abortSignal: input.abortSignal,
 		stopWhen: stepCountIs(MAX_STEPS),
 		experimental_onToolCallFinish: async (event) => {
 			if (!input.onProgress) return;

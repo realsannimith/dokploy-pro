@@ -195,6 +195,7 @@ export type AgentSource =
 	| "whatsapp"
 	| "signal"
 	| "email"
+	| "terminal"
 	| "web";
 
 export const findOrCreateConversation = async (input: {

@@ -43,6 +43,8 @@ COPY --from=build /prod/dokploy/drizzle ./drizzle
 COPY .env.production ./.env
 COPY --from=build /prod/dokploy/components.json ./components.json
 COPY --from=build /prod/dokploy/node_modules ./node_modules
+COPY apps/dokploy/bin/dokploypro-harness-container /usr/local/bin/dokploypro-harness
+RUN chmod 0755 /usr/local/bin/dokploypro-harness
 
 
 # Install docker

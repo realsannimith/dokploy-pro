@@ -141,11 +141,11 @@ describe("getMonitoringImage", () => {
 
 	it("derives the companion image published by a custom GHCR build", () => {
 		vi.stubEnv("DOKPLOY_MONITORING_IMAGE", "");
-		vi.stubEnv("DOKPLOY_IMAGE", "ghcr.io/realsannimith/self-dokploy");
+		vi.stubEnv("DOKPLOY_IMAGE", "ghcr.io/realsannimith/dokploy-pro");
 		vi.stubEnv("RELEASE_TAG", "custom");
 
 		expect(getMonitoringImage()).toBe(
-			"ghcr.io/realsannimith/self-dokploy:monitoring-custom",
+			"ghcr.io/realsannimith/dokploy-pro:monitoring-custom",
 		);
 	});
 });

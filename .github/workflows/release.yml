@@ -1,0 +1,122 @@
+name: Release Dokploy Pro
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version part to increase after the first release
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-dokploy-pro
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - name: Checkout canary
+        uses: actions/checkout@v4
+        with:
+          ref: canary
+          fetch-depth: 0
+
+      - name: Select release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT=$(node -p "require('./apps/dokploy/package.json').version")
+          BUMP="${{ inputs.bump }}"
+
+          if [[ ! "$CURRENT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version in apps/dokploy/package.json: $CURRENT" >&2
+            exit 1
+          fi
+
+          git fetch --force --tags origin
+
+          # Release the package version as-is when it has never been tagged. Once
+          # it exists, advance it using the selected SemVer part before release.
+          if git rev-parse --quiet --verify "refs/tags/$CURRENT" >/dev/null; then
+            VERSION=$(node -e '
+              const [current, bump] = process.argv.slice(1);
+              const parts = current.slice(1).split(".").map(Number);
+              if (bump === "major") {
+                parts[0] += 1; parts[1] = 0; parts[2] = 0;
+              } else if (bump === "minor") {
+                parts[1] += 1; parts[2] = 0;
+              } else {
+                parts[2] += 1;
+              }
+              process.stdout.write(`v${parts.join(".")}`);
+            ' "$CURRENT" "$BUMP")
+          else
+            VERSION="$CURRENT"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Preparing Dokploy Pro $VERSION"
+
+      - name: Update and commit version
+        id: commit
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          CURRENT=$(node -p "require('./apps/dokploy/package.json').version")
+
+          if [ "$CURRENT" != "$VERSION" ]; then
+            node -e '
+              const fs = require("node:fs");
+              const file = "apps/dokploy/package.json";
+              const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
+              pkg.version = process.env.VERSION;
+              fs.writeFileSync(file, `${JSON.stringify(pkg, null, "\t")}\n`);
+            '
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add apps/dokploy/package.json
+            git commit -m "chore: release ${VERSION}"
+            git push origin HEAD:canary
+          fi
+
+          SHA=$(git rev-parse HEAD)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+  build-images:
+    needs: prepare
+    uses: ./.github/workflows/build-image.yml
+    with:
+      version: ${{ needs.prepare.outputs.version }}
+      ref: ${{ needs.prepare.outputs.sha }}
+    secrets: inherit
+
+  publish-release:
+    needs: [prepare, build-images]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.version }}
+          target_commitish: ${{ needs.prepare.outputs.sha }}
+          name: Dokploy Pro ${{ needs.prepare.outputs.version }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false

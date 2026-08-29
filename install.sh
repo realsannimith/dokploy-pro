@@ -8,10 +8,10 @@
 # tracks it.
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/realsannimith/self-dokploy/canary/install.sh | bash
+#   curl -sSL https://raw.githubusercontent.com/realsannimith/dokploy-pro/canary/install.sh | bash
 #
 # To update an existing install to the newest pushed build:
-#   curl -sSL https://raw.githubusercontent.com/realsannimith/self-dokploy/canary/install.sh | bash -s update
+#   curl -sSL https://raw.githubusercontent.com/realsannimith/dokploy-pro/canary/install.sh | bash -s update
 #
 # Override the image or tag if you host the image somewhere else:
 #   DOKPLOY_IMAGE=youruser/dokploy DOKPLOY_TAG=custom bash install.sh
@@ -20,9 +20,41 @@
 DOCKER_VERSION="28.5.0"
 
 # This fork's image, auto-built by .github/workflows/build-image.yml.
-DOKPLOY_IMAGE="${DOKPLOY_IMAGE:-ghcr.io/realsannimith/self-dokploy}"
+DOKPLOY_IMAGE="${DOKPLOY_IMAGE:-ghcr.io/realsannimith/dokploy-pro}"
 # Pushing a new build of this tag makes the in-app "Update" button light up.
 DOKPLOY_TAG="${DOKPLOY_TAG:-custom}"
+
+# Install a host-side launcher that enters the active Dokploy Swarm task. The
+# actual harness lives in the Dokploy image so it always matches the server's
+# agent schema and release version.
+install_harness_launcher() {
+    cat > /usr/local/bin/dokploypro-harness <<'DOKPLOY_HARNESS_EOF'
+#!/bin/sh
+set -eu
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "dokploypro-harness requires Docker on the Dokploy host." >&2
+    exit 1
+fi
+
+container_id=$(docker ps \
+    --filter label=com.docker.swarm.service.name=dokploy \
+    --filter status=running \
+    --format '{{.ID}}' | head -n1)
+
+if [ -z "$container_id" ]; then
+    echo "The Dokploy service is not running. Start it before launching the harness." >&2
+    exit 1
+fi
+
+if [ -t 0 ] && [ -t 1 ]; then
+    exec docker exec -it "$container_id" dokploypro-harness "$@"
+fi
+
+exec docker exec -i "$container_id" dokploypro-harness "$@"
+DOKPLOY_HARNESS_EOF
+    chmod 0755 /usr/local/bin/dokploypro-harness
+}
 
 # Function to detect if running in Proxmox LXC container
 is_proxmox_lxc() {
@@ -289,6 +321,8 @@ install_dokploy() {
       -e BETTER_AUTH_SECRET_FILE=/run/secrets/dokploy_auth_secret \
       $DOCKER_IMAGE
 
+    install_harness_launcher
+
     sleep 4
 
     docker run -d \
@@ -348,6 +382,8 @@ update_dokploy() {
         --env-add RELEASE_TAG="$DOKPLOY_TAG" \
         --env-add DOKPLOY_IMAGE="$DOKPLOY_IMAGE" \
         --image $DOCKER_IMAGE dokploy
+
+    install_harness_launcher
 
     echo "Dokploy has been updated to custom image: ${DOCKER_IMAGE}"
 }

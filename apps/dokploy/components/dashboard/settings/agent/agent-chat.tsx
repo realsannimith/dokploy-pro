@@ -32,6 +32,7 @@ const SOURCE_LABELS: Record<string, string> = {
 	whatsapp: "WhatsApp",
 	signal: "Signal",
 	email: "Email",
+	terminal: "Terminal",
 	web: "Web",
 };
 

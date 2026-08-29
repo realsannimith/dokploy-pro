@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+
+exec node -r dotenv/config /app/dist/dokploypro-harness.mjs "$@"

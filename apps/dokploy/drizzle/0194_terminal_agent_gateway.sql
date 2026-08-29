@@ -1,0 +1,1 @@
+ALTER TYPE "public"."agentConversationSource" ADD VALUE 'terminal' BEFORE 'web';

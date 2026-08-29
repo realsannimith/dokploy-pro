@@ -233,6 +233,11 @@ const CONFIRMATION_TOOL_NOTE =
 	" Calling this does not run it: it sends the user an Approve/Reject prompt in the chat, which is the confirmation step. Call it as soon as the user asks for the action — never ask them to confirm in a chat message first, and never call it again while its prompt is unanswered.";
 
 export interface AgentConfirmationHandler {
+	/**
+	 * Deferred gateways send a button or command and execute later. Inline
+	 * gateways (the local harness) pause the current turn and return the result.
+	 */
+	mode?: "deferred" | "inline";
 	request: (request: {
 		toolName: string;
 		summary: string;

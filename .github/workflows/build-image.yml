@@ -1,6 +1,6 @@
-name: Build Custom Dokploy Image
+name: Build Dokploy Pro Images
 
-# Builds this fork's Dokploy image and pushes it to GitHub Container Registry
+# Builds Dokploy Pro and pushes its images to GitHub Container Registry
 # (ghcr.io/<owner>/<repo>:custom) on every push to canary, together with the
 # companion monitoring image (ghcr.io/<owner>/<repo>:monitoring-custom). Uses
 # the built-in GITHUB_TOKEN — no extra secrets needed. install.sh and the
@@ -10,6 +10,18 @@ on:
   push:
     branches: [canary]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Optional SemVer tag for a stable release build
+        required: false
+        type: string
+        default: ""
+      ref:
+        description: Git ref or commit to build
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -21,6 +33,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -34,8 +48,34 @@ jobs:
 
       - name: Set image name
         id: meta
+        shell: bash
         run: |
-          echo "image=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          VERSION="${{ inputs.version }}"
+
+          if [ -n "$VERSION" ]; then
+            if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Invalid release version: $VERSION" >&2
+              exit 1
+            fi
+
+            {
+              echo "app_tags<<EOF"
+              echo "${IMAGE}:${VERSION}"
+              echo "${IMAGE}:latest"
+              echo "${IMAGE}:custom"
+              echo "EOF"
+              echo "monitoring_tags<<EOF"
+              echo "${IMAGE}:monitoring-${VERSION}"
+              echo "${IMAGE}:monitoring-latest"
+              echo "${IMAGE}:monitoring-custom"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "app_tags=${IMAGE}:custom" >> "$GITHUB_OUTPUT"
+            echo "monitoring_tags=${IMAGE}:monitoring-custom" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Prepare env file
         run: |
@@ -48,7 +88,7 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta.outputs.image }}:custom
+          tags: ${{ steps.meta.outputs.app_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -59,6 +99,6 @@ jobs:
           file: ./Dockerfile.monitoring
           platforms: linux/amd64
           push: true
-          tags: ${{ steps.meta.outputs.image }}:monitoring-custom
+          tags: ${{ steps.meta.outputs.monitoring_tags }}
           cache-from: type=gha,scope=monitoring
           cache-to: type=gha,mode=max,scope=monitoring
