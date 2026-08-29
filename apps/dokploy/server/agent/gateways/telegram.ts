@@ -1,3 +1,4 @@
+import { matchesAllowlist, parseAllowlist } from "../access";
 import { chunkText, dispatchMessage } from "./dispatch";
 import type { GatewayHandle, GatewayStartInput } from "./types";
 import { sleep } from "./types";
@@ -15,9 +16,17 @@ interface TelegramMessage {
 	text?: string;
 }
 
+interface TelegramCallbackQuery {
+	id: string;
+	from?: TelegramUser;
+	message?: TelegramMessage;
+	data?: string;
+}
+
 interface TelegramUpdate {
 	update_id: number;
 	message?: TelegramMessage;
+	callback_query?: TelegramCallbackQuery;
 }
 
 const telegramApi = async (
@@ -69,6 +78,110 @@ const sendMessage = async (token: string, chatId: number, text: string) => {
 	}
 };
 
+const CALLBACK_PREFIX = "aga:";
+
+const sendConfirmationButtons = async (
+	token: string,
+	chatId: number,
+	actionId: string,
+	summary: string,
+) => {
+	await telegramApi(token, "sendMessage", {
+		chat_id: chatId,
+		text: `⚠️ Confirmation required\n\n${summary}\n\nDo you approve this action?`,
+		reply_markup: {
+			inline_keyboard: [
+				[
+					{
+						text: "✅ Approve",
+						callback_data: `${CALLBACK_PREFIX}${actionId}:y`,
+					},
+					{
+						text: "❌ Reject",
+						callback_data: `${CALLBACK_PREFIX}${actionId}:n`,
+					},
+				],
+			],
+		},
+	});
+};
+
+const handleActionCallback = async (
+	token: string,
+	channelId: string,
+	callback: TelegramCallbackQuery,
+) => {
+	const answer = (text?: string) =>
+		telegramApi(token, "answerCallbackQuery", {
+			callback_query_id: callback.id,
+			...(text ? { text } : {}),
+		}).catch(() => {});
+
+	try {
+		const [, actionId, verdict] = (callback.data || "").split(":");
+		if (!actionId) {
+			await answer();
+			return;
+		}
+
+		// Only allowlisted users may decide, and only from the chat the
+		// confirmation was sent to.
+		const { findChannelById, findPendingActionById } = await import(
+			"@dokploy/server/services/agent"
+		);
+		const channel = await findChannelById(channelId);
+		const allowlist = parseAllowlist(channel.allowedIdentifiers);
+		if (
+			!matchesAllowlist(allowlist, [callback.from?.id, callback.from?.username])
+		) {
+			await answer("You are not allowed to decide this action.");
+			return;
+		}
+		const action = await findPendingActionById(actionId);
+		if (
+			action.channelId !== channelId ||
+			(action.externalChatId &&
+				String(callback.message?.chat.id) !== action.externalChatId)
+		) {
+			await answer("This action does not belong to this chat.");
+			return;
+		}
+
+		const { resolvePendingAction } = await import("../pending");
+		const actor = callback.from?.username
+			? `@${callback.from.username}`
+			: String(callback.from?.id ?? "user");
+		const resolved = await resolvePendingAction(
+			actionId,
+			verdict === "y",
+			actor,
+		);
+		await answer();
+
+		if (callback.message) {
+			const icon =
+				resolved.status === "approved"
+					? "✅ Approved"
+					: resolved.status === "rejected"
+						? "❌ Rejected"
+						: `⌛ ${resolved.status}`;
+			// Replace the buttons with the outcome so they can't be tapped twice.
+			await telegramApi(token, "editMessageText", {
+				chat_id: callback.message.chat.id,
+				message_id: callback.message.message_id,
+				text: `${icon} by ${actor}\n\n${resolved.summary}`,
+			}).catch(() => {});
+			await sendMessage(token, callback.message.chat.id, resolved.text);
+		}
+	} catch (error) {
+		console.error(
+			"[agent-gateway] Failed to process Telegram confirmation:",
+			error instanceof Error ? error.message : error,
+		);
+		await answer("Failed to process this action.");
+	}
+};
+
 export const startTelegram = ({
 	channelId,
 	agentId,
@@ -101,13 +214,22 @@ export const startTelegram = ({
 				const updates = (await telegramApi(
 					token,
 					"getUpdates",
-					{ timeout: 50, offset, allowed_updates: ["message"] },
+					{
+						timeout: 50,
+						offset,
+						allowed_updates: ["message", "callback_query"],
+					},
 					abort.signal,
 				)) as TelegramUpdate[];
 
 				for (const update of updates) {
 					offset = update.update_id + 1;
 					if (stopped) break;
+					const callback = update.callback_query;
+					if (callback?.data?.startsWith(CALLBACK_PREFIX)) {
+						await handleActionCallback(token, channelId, callback);
+						continue;
+					}
 					const message = update.message;
 					if (!message?.text) continue;
 
@@ -131,6 +253,13 @@ export const startTelegram = ({
 							text: message.text,
 							identifiers: [message.from?.id, message.from?.username],
 							reply: (text) => sendMessage(token, message.chat.id, text),
+							sendConfirmation: ({ actionId, summary }) =>
+								sendConfirmationButtons(
+									token,
+									message.chat.id,
+									actionId,
+									summary,
+								),
 						});
 					} finally {
 						clearInterval(typing);

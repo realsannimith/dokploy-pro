@@ -1,6 +1,191 @@
-import { tool } from "ai";
+import { randomBytes } from "node:crypto";
+import type { AgentToolConfig } from "@dokploy/server/db/schema/agent";
+import { generateAppName } from "@dokploy/server/db/schema/utils";
+import { type Tool, tool } from "ai";
 import { z } from "zod";
 import type { AgentCaller } from "./caller";
+
+export type AgentToolGroup = "Read" | "Operate" | "Create" | "Destructive";
+
+export interface AgentToolMeta {
+	name: string;
+	group: AgentToolGroup;
+	description: string;
+	/** Destructive tools always require confirmation; it cannot be disabled. */
+	destructive?: boolean;
+	summarize?: (input: any) => string;
+}
+
+export const AGENT_TOOL_META: AgentToolMeta[] = [
+	{
+		name: "listProjects",
+		group: "Read",
+		description: "List projects, environments and services",
+	},
+	{
+		name: "getService",
+		group: "Read",
+		description: "Read one service's details, domains and backups",
+	},
+	{
+		name: "listDeployments",
+		group: "Read",
+		description: "List recent deployments",
+	},
+	{
+		name: "readDeploymentLogs",
+		group: "Read",
+		description: "Read deployment logs",
+	},
+	{ name: "listSchedules", group: "Read", description: "List cron schedules" },
+	{
+		name: "listBackupFiles",
+		group: "Read",
+		description: "List stored backup files",
+	},
+	{ name: "listServers", group: "Read", description: "List remote servers" },
+	{
+		name: "listContainers",
+		group: "Read",
+		description: "List docker containers",
+	},
+	{
+		name: "deployService",
+		group: "Operate",
+		description: "Deploy a service",
+		summarize: (input) => `Deploy ${input.serviceType} ${input.serviceId}`,
+	},
+	{
+		name: "redeployService",
+		group: "Operate",
+		description: "Redeploy from the last build",
+		summarize: (input) => `Redeploy ${input.serviceType} ${input.serviceId}`,
+	},
+	{
+		name: "startService",
+		group: "Operate",
+		description: "Start a stopped service",
+		summarize: (input) => `Start ${input.serviceType} ${input.serviceId}`,
+	},
+	{
+		name: "stopService",
+		group: "Operate",
+		description: "Stop a running service",
+		summarize: (input) => `Stop ${input.serviceType} ${input.serviceId}`,
+	},
+	{
+		name: "runSchedule",
+		group: "Operate",
+		description: "Run a cron schedule manually",
+	},
+	{
+		name: "runBackup",
+		group: "Operate",
+		description: "Run a database backup manually",
+	},
+	{
+		name: "createProject",
+		group: "Create",
+		description: "Create a project",
+		summarize: (input) => `Create project "${input.name}"`,
+	},
+	{
+		name: "createEnvironment",
+		group: "Create",
+		description: "Create an environment in a project",
+		summarize: (input) => `Create environment "${input.name}"`,
+	},
+	{
+		name: "createDatabase",
+		group: "Create",
+		description: "Create a database service",
+		summarize: (input) =>
+			`Create ${input.databaseType} database "${input.name}"`,
+	},
+	{
+		name: "createApplication",
+		group: "Create",
+		description: "Create an application service",
+		summarize: (input) => `Create application "${input.name}"`,
+	},
+	{
+		name: "deleteService",
+		group: "Destructive",
+		description: "Delete a service and its container",
+		destructive: true,
+		summarize: (input) => `Delete ${input.serviceType} "${input.confirmName}"`,
+	},
+	{
+		name: "deleteEnvironment",
+		group: "Destructive",
+		description: "Delete an environment and every service in it",
+		destructive: true,
+		summarize: (input) =>
+			`Delete environment "${input.confirmName}" and ALL its services`,
+	},
+	{
+		name: "deleteProject",
+		group: "Destructive",
+		description: "Delete a whole project and everything in it",
+		destructive: true,
+		summarize: (input) =>
+			`Delete project "${input.confirmName}" and ALL its environments and services`,
+	},
+];
+
+const AGENT_TOOL_META_MAP = new Map(
+	AGENT_TOOL_META.map((meta) => [meta.name, meta]),
+);
+
+export interface ResolvedToolSetting {
+	enabled: boolean;
+	confirm: boolean;
+}
+
+/** Missing config entries fall back to: enabled, confirm only for destructive. */
+export const resolveToolSetting = (
+	name: string,
+	config?: AgentToolConfig | null,
+): ResolvedToolSetting => {
+	const meta = AGENT_TOOL_META_MAP.get(name);
+	const setting = config?.[name];
+	const destructive = !!meta?.destructive;
+	return {
+		enabled: setting?.enabled ?? true,
+		confirm: destructive ? true : (setting?.confirm ?? false),
+	};
+};
+
+const summarizeToolCall = (name: string, input: unknown) => {
+	const meta = AGENT_TOOL_META_MAP.get(name);
+	if (meta?.summarize) {
+		try {
+			return meta.summarize(input);
+		} catch {
+			// fall through to the generic summary
+		}
+	}
+	const raw = JSON.stringify(input ?? {});
+	return `${name} ${raw.length > 200 ? `${raw.slice(0, 200)}…` : raw}`;
+};
+
+export interface AgentConfirmationHandler {
+	request: (request: {
+		toolName: string;
+		summary: string;
+		toolInput: unknown;
+	}) => Promise<string>;
+}
+
+export interface BuildAgentToolsOptions {
+	toolConfig?: AgentToolConfig | null;
+	/**
+	 * When set, tools whose resolved setting requires confirmation do not
+	 * execute; they hand the call to this handler (which stores it and shows
+	 * Approve/Reject buttons) and return its marker text to the model.
+	 */
+	confirmation?: AgentConfirmationHandler;
+}
 
 const serviceTypeSchema = z.enum([
 	"application",
@@ -14,6 +199,47 @@ const serviceTypeSchema = z.enum([
 ]);
 
 type ServiceType = z.infer<typeof serviceTypeSchema>;
+
+const databaseTypeSchema = z.enum([
+	"postgres",
+	"mysql",
+	"mariadb",
+	"mongo",
+	"redis",
+	"libsql",
+]);
+
+type DatabaseType = z.infer<typeof databaseTypeSchema>;
+
+const DEFAULT_DB_IMAGES: Record<DatabaseType, string> = {
+	postgres: "postgres:18",
+	mysql: "mysql:8",
+	mariadb: "mariadb:11",
+	mongo: "mongo:8",
+	redis: "redis:8",
+	libsql: "ghcr.io/tursodatabase/libsql-server:v0.24.32",
+};
+
+const DEFAULT_DB_USERS: Record<Exclude<DatabaseType, "redis">, string> = {
+	postgres: "postgres",
+	mysql: "mysql",
+	mariadb: "mariadb",
+	mongo: "mongo",
+	libsql: "libsql",
+};
+
+// Alphanumeric only, so it always satisfies DATABASE_PASSWORD_REGEX.
+const PASSWORD_CHARS =
+	"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+const generatePassword = (length = 24) => {
+	const bytes = randomBytes(length);
+	let result = "";
+	for (const byte of bytes) {
+		result += PASSWORD_CHARS[byte % PASSWORD_CHARS.length];
+	}
+	return result;
+};
 
 const MAX_OUTPUT_CHARS = 8000;
 
@@ -103,7 +329,10 @@ const scheduleSummaryKeys = [
 	"serverId",
 ];
 
-export const buildAgentTools = (caller: AgentCaller) => {
+export const buildAgentTools = (
+	caller: AgentCaller,
+	options?: BuildAgentToolsOptions,
+) => {
 	const getService = async (serviceType: ServiceType, serviceId: string) => {
 		switch (serviceType) {
 			case "application":
@@ -125,7 +354,7 @@ export const buildAgentTools = (caller: AgentCaller) => {
 		}
 	};
 
-	return {
+	const allTools = {
 		listProjects: tool({
 			description:
 				"List every project with its environments and services (name, id, type, status). Use this first to find the service the user is talking about.",
@@ -544,5 +773,352 @@ export const buildAgentTools = (caller: AgentCaller) => {
 				}
 			},
 		}),
+		createProject: tool({
+			description:
+				"Create a new project. A default 'production' environment is created with it; the response includes its environmentId so services can be added right away.",
+			inputSchema: z.object({
+				name: z.string().min(1),
+				description: z.string().optional(),
+			}),
+			execute: async ({ name, description }) => {
+				try {
+					const result = (await caller.project.create({
+						name,
+						description,
+					})) as any;
+					return toResult({
+						project: pick(result?.project, ["projectId", "name"]),
+						environment: pick(result?.environment, ["environmentId", "name"]),
+					});
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		createEnvironment: tool({
+			description:
+				"Create a new environment inside an existing project (e.g. staging, development).",
+			inputSchema: z.object({
+				projectId: z.string(),
+				name: z.string().min(1),
+				description: z.string().optional(),
+			}),
+			execute: async ({ projectId, name, description }) => {
+				try {
+					const environment = (await caller.environment.create({
+						projectId,
+						name,
+						description,
+					})) as any;
+					return toResult(pick(environment, ["environmentId", "name"]));
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		createDatabase: tool({
+			description:
+				"Create a new database service (postgres, mysql, mariadb, mongo, redis or libsql) in an environment. Credentials are auto-generated when omitted and returned once — share them with the user. The database is created but NOT started; call deployService with the returned serviceId to actually start it.",
+			inputSchema: z.object({
+				environmentId: z
+					.string()
+					.describe("Get it from listProjects or createProject"),
+				databaseType: databaseTypeSchema,
+				name: z.string().min(1).describe("Display name for the service"),
+				serverId: z
+					.string()
+					.optional()
+					.describe(
+						"Deploy on this remote server (see listServers). Omit to run on the Dokploy host.",
+					),
+				databaseName: z.string().optional(),
+				databaseUser: z.string().optional(),
+				databasePassword: z
+					.string()
+					.optional()
+					.describe("Omit to auto-generate a secure password"),
+				dockerImage: z.string().optional(),
+				description: z.string().optional(),
+			}),
+			execute: async (input) => {
+				try {
+					const { databaseType, environmentId, name } = input;
+					const appName = generateAppName(databaseType);
+					const dockerImage =
+						input.dockerImage || DEFAULT_DB_IMAGES[databaseType];
+					const databasePassword = input.databasePassword || generatePassword();
+					const databaseUser =
+						databaseType === "redis"
+							? undefined
+							: input.databaseUser || DEFAULT_DB_USERS[databaseType];
+					const databaseName =
+						input.databaseName ||
+						(databaseType === "postgres"
+							? "postgres"
+							: databaseType === "mysql"
+								? "mysql"
+								: "mariadb");
+					const common = {
+						name,
+						appName,
+						dockerImage,
+						environmentId,
+						description: input.description ?? "",
+						serverId: input.serverId || null,
+					};
+
+					let created: any;
+					let rootPassword: string | undefined;
+					switch (databaseType) {
+						case "postgres":
+							created = await caller.postgres.create({
+								...common,
+								databaseName,
+								databaseUser: databaseUser as string,
+								databasePassword,
+							} as any);
+							break;
+						case "mysql":
+							rootPassword = generatePassword();
+							created = await caller.mysql.create({
+								...common,
+								databaseName,
+								databaseUser: databaseUser as string,
+								databasePassword,
+								databaseRootPassword: rootPassword,
+							} as any);
+							break;
+						case "mariadb":
+							rootPassword = generatePassword();
+							created = await caller.mariadb.create({
+								...common,
+								databaseName,
+								databaseUser: databaseUser as string,
+								databasePassword,
+								databaseRootPassword: rootPassword,
+							} as any);
+							break;
+						case "mongo":
+							created = await caller.mongo.create({
+								...common,
+								databaseUser: databaseUser as string,
+								databasePassword,
+								replicaSets: false,
+							} as any);
+							break;
+						case "redis":
+							created = await caller.redis.create({
+								...common,
+								databasePassword,
+							} as any);
+							break;
+						case "libsql":
+							created = await caller.libsql.create({
+								...common,
+								databaseUser: databaseUser as string,
+								databasePassword,
+								sqldNode: "primary",
+								sqldPrimaryUrl: null,
+								enableNamespaces: false,
+							} as any);
+							break;
+					}
+
+					const serviceId =
+						created && typeof created === "object"
+							? created[serviceIdField[databaseType]]
+							: undefined;
+					return toResult({
+						serviceType: databaseType,
+						serviceId: serviceId ?? "(created — find the id with listProjects)",
+						name,
+						appName,
+						credentials: {
+							...(databaseUser ? { user: databaseUser } : {}),
+							password: databasePassword,
+							...(databaseType === "postgres" ||
+							databaseType === "mysql" ||
+							databaseType === "mariadb"
+								? { database: databaseName }
+								: {}),
+							...(rootPassword ? { rootPassword } : {}),
+						},
+						deployed: false,
+						next: "Call deployService with this serviceType/serviceId to start the database.",
+					});
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		createApplication: tool({
+			description:
+				"Create a new (empty) application service in an environment. The git/docker source must then be configured in the dashboard before it can deploy.",
+			inputSchema: z.object({
+				environmentId: z.string(),
+				name: z.string().min(1),
+				serverId: z
+					.string()
+					.optional()
+					.describe(
+						"Deploy on this remote server (see listServers). Omit to run on the Dokploy host.",
+					),
+				description: z.string().optional(),
+			}),
+			execute: async ({ environmentId, name, serverId, description }) => {
+				try {
+					const created = (await caller.application.create({
+						name,
+						appName: generateAppName("app"),
+						environmentId,
+						serverId: serverId || null,
+						description: description ?? "",
+					} as any)) as any;
+					return toResult({
+						serviceType: "application",
+						serviceId: created?.applicationId,
+						...pick(created, ["name", "appName"]),
+						next: "Configure its source (git provider or docker image) in the dashboard, then deploy.",
+					});
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		deleteService: tool({
+			description:
+				"Permanently delete a service and its container. DESTRUCTIVE and irreversible — only call this after the user explicitly confirmed the deletion in this conversation. confirmName must exactly match the service's current name (check with getService).",
+			inputSchema: z.object({
+				serviceType: serviceTypeSchema,
+				serviceId: z.string(),
+				confirmName: z
+					.string()
+					.describe("The exact name of the service, as a safety check"),
+				deleteVolumes: z
+					.boolean()
+					.default(false)
+					.describe("Compose only: also delete its volumes"),
+			}),
+			execute: async ({
+				serviceType,
+				serviceId,
+				confirmName,
+				deleteVolumes,
+			}) => {
+				try {
+					const service = (await getService(serviceType, serviceId)) as any;
+					if (service?.name !== confirmName) {
+						return toResult(
+							`Refused: confirmName "${confirmName}" does not match the service's actual name "${service?.name}". Double-check with the user before deleting.`,
+						);
+					}
+					switch (serviceType) {
+						case "application":
+							await caller.application.delete({ applicationId: serviceId });
+							break;
+						case "compose":
+							await caller.compose.delete({
+								composeId: serviceId,
+								deleteVolumes,
+							});
+							break;
+						case "postgres":
+							await caller.postgres.remove({ postgresId: serviceId });
+							break;
+						case "mysql":
+							await caller.mysql.remove({ mysqlId: serviceId });
+							break;
+						case "mariadb":
+							await caller.mariadb.remove({ mariadbId: serviceId });
+							break;
+						case "mongo":
+							await caller.mongo.remove({ mongoId: serviceId });
+							break;
+						case "redis":
+							await caller.redis.remove({ redisId: serviceId });
+							break;
+						case "libsql":
+							await caller.libsql.remove({ libsqlId: serviceId });
+							break;
+					}
+					return toResult(`Service "${confirmName}" deleted.`);
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		deleteEnvironment: tool({
+			description:
+				"Permanently delete an environment and EVERY service inside it. DESTRUCTIVE and irreversible — only call this after the user explicitly confirmed. confirmName must exactly match the environment's name.",
+			inputSchema: z.object({
+				environmentId: z.string(),
+				confirmName: z
+					.string()
+					.describe("The exact name of the environment, as a safety check"),
+			}),
+			execute: async ({ environmentId, confirmName }) => {
+				try {
+					const environment = (await caller.environment.one({
+						environmentId,
+					})) as any;
+					if (environment?.name !== confirmName) {
+						return toResult(
+							`Refused: confirmName "${confirmName}" does not match the environment's actual name "${environment?.name}".`,
+						);
+					}
+					await caller.environment.remove({ environmentId });
+					return toResult(`Environment "${confirmName}" deleted.`);
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		deleteProject: tool({
+			description:
+				"Permanently delete a whole project with ALL its environments and services. DESTRUCTIVE and irreversible — only call this after the user explicitly confirmed. confirmName must exactly match the project's name.",
+			inputSchema: z.object({
+				projectId: z.string(),
+				confirmName: z
+					.string()
+					.describe("The exact name of the project, as a safety check"),
+			}),
+			execute: async ({ projectId, confirmName }) => {
+				try {
+					const project = (await caller.project.one({ projectId })) as any;
+					if (project?.name !== confirmName) {
+						return toResult(
+							`Refused: confirmName "${confirmName}" does not match the project's actual name "${project?.name}".`,
+						);
+					}
+					await caller.project.remove({ projectId });
+					return toResult(`Project "${confirmName}" deleted.`);
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
 	};
+
+	const tools: Record<string, Tool> = {};
+	for (const [name, toolDef] of Object.entries(
+		allTools as Record<string, Tool>,
+	)) {
+		const setting = resolveToolSetting(name, options?.toolConfig);
+		if (!setting.enabled) continue;
+		const confirmation = options?.confirmation;
+		if (setting.confirm && confirmation) {
+			tools[name] = {
+				...toolDef,
+				execute: async (input: unknown) =>
+					await confirmation.request({
+						toolName: name,
+						summary: summarizeToolCall(name, input),
+						toolInput: input,
+					}),
+			};
+		} else {
+			tools[name] = toolDef;
+		}
+	}
+	return tools;
 };

@@ -1,4 +1,5 @@
 import { validateRequest } from "@dokploy/server";
+import { findAgentByOrganizationId } from "@dokploy/server/services/agent";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -9,6 +10,11 @@ import { TRPCError } from "@trpc/server";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { appRouter } from "@/server/api/root";
 import { createTRPCContext } from "@/server/api/trpc";
+import {
+	isMcpToolAllowed,
+	type ResolvedMcpPolicy,
+	resolveMcpPolicy,
+} from "@/server/mcp/policy";
 import { getMcpTools } from "@/server/mcp/registry";
 
 export const config = {
@@ -50,18 +56,24 @@ const formatError = (error: unknown): string => {
 	return error instanceof Error ? error.message : String(error);
 };
 
-const buildMcpServer = (req: NextApiRequest, res: NextApiResponse) => {
+const buildMcpServer = (
+	req: NextApiRequest,
+	res: NextApiResponse,
+	policy: ResolvedMcpPolicy,
+) => {
 	const server = new Server(
 		{ name: "dokploy", version: "1.0.0" },
 		{ capabilities: { tools: {} } },
 	);
 
 	server.setRequestHandler(ListToolsRequestSchema, async () => ({
-		tools: [...getMcpTools().values()].map((tool) => ({
-			name: tool.name,
-			description: tool.description,
-			inputSchema: tool.inputSchema,
-		})),
+		tools: [...getMcpTools().values()]
+			.filter((tool) => isMcpToolAllowed(tool, policy))
+			.map((tool) => ({
+				name: tool.name,
+				description: tool.description,
+				inputSchema: tool.inputSchema,
+			})),
 	}));
 
 	server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -70,6 +82,17 @@ const buildMcpServer = (req: NextApiRequest, res: NextApiResponse) => {
 			return {
 				content: [
 					{ type: "text", text: `Unknown tool: ${request.params.name}` },
+				],
+				isError: true,
+			};
+		}
+		if (!isMcpToolAllowed(tool, policy)) {
+			return {
+				content: [
+					{
+						type: "text",
+						text: `The tool "${request.params.name}" is blocked by the MCP access policy. An administrator can change it in Settings -> AI Agent -> MCP access.`,
+					},
 				],
 				isError: true,
 			};
@@ -129,11 +152,28 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
 		return;
 	}
 
+	const agent = await findAgentByOrganizationId(
+		session.activeOrganizationId || "",
+	);
+	const policy = resolveMcpPolicy(agent?.mcpConfig);
+	if (!policy.enabled) {
+		res.status(403).json({
+			jsonrpc: "2.0",
+			error: {
+				code: -32002,
+				message:
+					"The MCP endpoint is disabled for this organization. An administrator can enable it in Settings -> AI Agent -> MCP access.",
+			},
+			id: null,
+		});
+		return;
+	}
+
 	// Be lenient with clients that only send one of the two accept types the
 	// transport requires; responses are always JSON here.
 	req.headers.accept = "application/json, text/event-stream";
 
-	const server = buildMcpServer(req, res);
+	const server = buildMcpServer(req, res, policy);
 	const transport = new StreamableHTTPServerTransport({
 		sessionIdGenerator: undefined,
 		enableJsonResponse: true,

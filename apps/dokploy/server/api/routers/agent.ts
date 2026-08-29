@@ -3,6 +3,8 @@ import {
 	apiAgentChat,
 	apiSaveAgent,
 	apiSaveAgentChannel,
+	apiSaveAgentMcpConfig,
+	apiSaveAgentToolConfig,
 } from "@dokploy/server/db/schema/agent";
 import {
 	deleteAgentChannel,
@@ -15,6 +17,7 @@ import {
 	findMessagesByConversationId,
 	saveAgent,
 	saveAgentChannel,
+	updateAgentSettings,
 } from "@dokploy/server/services/agent";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -29,7 +32,10 @@ import { getSlackBotInfo } from "@/server/agent/gateways/slack";
 import { getTelegramBotInfo } from "@/server/agent/gateways/telegram";
 import { getWhatsappInfo } from "@/server/agent/gateways/whatsapp";
 import { runAgent } from "@/server/agent/run-agent";
+import { AGENT_TOOL_META, resolveToolSetting } from "@/server/agent/tools";
 import { adminProcedure, createTRPCRouter } from "@/server/api/trpc";
+import { resolveMcpPolicy, routerOfTool } from "@/server/mcp/policy";
+import { getMcpTools } from "@/server/mcp/registry";
 
 const requireAgent = async (organizationId: string) => {
 	const agent = await findAgentByOrganizationId(organizationId);
@@ -112,6 +118,71 @@ export const agentRouter = createTRPCRouter({
 		await reloadAgentGateways(ctx.session.activeOrganizationId);
 		return agent;
 	}),
+
+	tools: adminProcedure.query(async ({ ctx }) => {
+		const agent = await findAgentByOrganizationId(
+			ctx.session.activeOrganizationId,
+		);
+		return AGENT_TOOL_META.map((meta) => ({
+			name: meta.name,
+			group: meta.group,
+			description: meta.description,
+			destructive: !!meta.destructive,
+			...resolveToolSetting(meta.name, agent?.toolConfig),
+		}));
+	}),
+
+	saveToolConfig: adminProcedure
+		.input(apiSaveAgentToolConfig)
+		.mutation(async ({ ctx, input }) => {
+			const agent = await requireAgent(ctx.session.activeOrganizationId);
+			const knownNames = new Set(AGENT_TOOL_META.map((meta) => meta.name));
+			const toolConfig: typeof input = {};
+			for (const [name, setting] of Object.entries(input)) {
+				if (knownNames.has(name)) {
+					toolConfig[name] = setting;
+				}
+			}
+			await updateAgentSettings(agent.agentId, { toolConfig });
+			return true;
+		}),
+
+	mcpInfo: adminProcedure.query(async ({ ctx }) => {
+		const agent = await findAgentByOrganizationId(
+			ctx.session.activeOrganizationId,
+		);
+		const routers = new Map<
+			string,
+			{ router: string; total: number; queries: number; mutations: number }
+		>();
+		for (const tool of getMcpTools().values()) {
+			const router = routerOfTool(tool);
+			const entry = routers.get(router) ?? {
+				router,
+				total: 0,
+				queries: 0,
+				mutations: 0,
+			};
+			entry.total += 1;
+			if (tool.type === "query") entry.queries += 1;
+			else entry.mutations += 1;
+			routers.set(router, entry);
+		}
+		return {
+			policy: resolveMcpPolicy(agent?.mcpConfig),
+			routers: [...routers.values()].sort((a, b) =>
+				a.router.localeCompare(b.router),
+			),
+		};
+	}),
+
+	saveMcpConfig: adminProcedure
+		.input(apiSaveAgentMcpConfig)
+		.mutation(async ({ ctx, input }) => {
+			const agent = await requireAgent(ctx.session.activeOrganizationId);
+			await updateAgentSettings(agent.agentId, { mcpConfig: input });
+			return true;
+		}),
 
 	channels: adminProcedure.query(async ({ ctx }) => {
 		const agent = await findAgentByOrganizationId(

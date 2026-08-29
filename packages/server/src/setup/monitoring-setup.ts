@@ -6,12 +6,24 @@ import {
 import { getWebServerSettings } from "@dokploy/server/services/web-server-settings";
 import type { CreateServiceOptions } from "dockerode";
 import { IS_CLOUD } from "../constants";
-import { getDokployImageTag } from "../services/settings";
+import { getDokployImage, getDokployImageTag } from "../services/settings";
 import { pullImage, pullRemoteImage } from "../utils/docker/utils";
 import { execAsync, execAsyncRemote } from "../utils/process/execAsync";
 import { getRemoteDocker } from "../utils/servers/remote-docker";
 
-const getMonitoringImage = () => {
+export const getMonitoringImage = () => {
+	const configuredImage = process.env.DOKPLOY_MONITORING_IMAGE?.trim();
+	if (configuredImage) {
+		return configuredImage;
+	}
+
+	// This fork publishes its monitoring binary beside the main Dokploy image.
+	// Keep official installs on Docker Hub while allowing a custom GHCR build to
+	// ship collector fixes without depending on upstream image publication.
+	if (process.env.DOKPLOY_IMAGE && getDokployImage().startsWith("ghcr.io/")) {
+		return `${getDokployImage()}:monitoring-${getDokployImageTag()}`;
+	}
+
 	let imageName = "dokploy/monitoring:latest";
 
 	if (
@@ -54,7 +66,7 @@ const deployMonitoringService = async (
 		const service = docker.getService(serviceName);
 		const inspect = await service.inspect();
 		await service.update({
-			version: Number.parseInt(inspect.Version.Index),
+			version: Number.parseInt(inspect.Version.Index, 10),
 			...settings,
 			TaskTemplate: {
 				...settings.TaskTemplate,
@@ -78,6 +90,42 @@ const generateMetricsToken = () => {
 		"",
 	);
 };
+
+type MetricsConfig = {
+	server: unknown;
+	containers: {
+		refreshRate: number;
+		services: {
+			include: string[];
+			exclude: string[];
+		};
+	};
+};
+
+const encodeWildcardForLegacyAgent = (services: string[]) =>
+	services.map((service) => (service === "*" ? "" : service));
+
+// Older published monitoring images stop collecting when `include` is empty,
+// even though their filter treats an empty list as "all services". An empty
+// string is a substring of every container name, so it safely carries the
+// intended wildcard semantics to both old and corrected monitoring agents.
+export const prepareMetricsConfigForAgent = (metricsConfig: MetricsConfig) => ({
+	...metricsConfig,
+	containers: {
+		...metricsConfig.containers,
+		services: {
+			include:
+				metricsConfig.containers.services.include.length === 0
+					? [""]
+					: encodeWildcardForLegacyAgent(
+							metricsConfig.containers.services.include,
+						),
+			exclude: encodeWildcardForLegacyAgent(
+				metricsConfig.containers.services.exclude,
+			),
+		},
+	},
+});
 
 // Provisions monitoring with sensible defaults so a remote server starts
 // reporting metrics without filling the setup form. An existing token is
@@ -104,6 +152,7 @@ export const autoConfigureMonitoring = async (serverId: string) => {
 
 export const setupMonitoring = async (serverId: string) => {
 	const server = await findServerById(serverId);
+	const metricsConfig = prepareMetricsConfigForAgent(server.metricsConfig);
 
 	const serviceName = "dokploy-monitoring";
 	const imageName = getMonitoringImage();
@@ -113,7 +162,7 @@ export const setupMonitoring = async (serverId: string) => {
 		TaskTemplate: {
 			ContainerSpec: {
 				Image: imageName,
-				Env: [`METRICS_CONFIG=${JSON.stringify(server?.metricsConfig)}`],
+				Env: [`METRICS_CONFIG=${JSON.stringify(metricsConfig)}`],
 				Mounts: [
 					{
 						Type: "bind",
@@ -174,15 +223,16 @@ export const setupWebMonitoring = async () => {
 	const serviceName = "dokploy-monitoring";
 	const imageName = getMonitoringImage();
 	const port = webServerSettings?.metricsConfig?.server?.port;
+	const metricsConfig = webServerSettings?.metricsConfig
+		? prepareMetricsConfigForAgent(webServerSettings.metricsConfig)
+		: undefined;
 
 	const settings: CreateServiceOptions = {
 		Name: serviceName,
 		TaskTemplate: {
 			ContainerSpec: {
 				Image: imageName,
-				Env: [
-					`METRICS_CONFIG=${JSON.stringify(webServerSettings?.metricsConfig)}`,
-				],
+				Env: [`METRICS_CONFIG=${JSON.stringify(metricsConfig)}`],
 				Mounts: [
 					{
 						Type: "bind",

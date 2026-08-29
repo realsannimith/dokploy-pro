@@ -4,8 +4,11 @@ import {
 	agentChannel,
 	agentConversation,
 	agentMessage,
+	agentPendingAction,
 } from "@dokploy/server/db/schema";
 import type {
+	AgentMcpConfig,
+	AgentToolConfig,
 	apiSaveAgent,
 	apiSaveAgentChannel,
 } from "@dokploy/server/db/schema/agent";
@@ -149,6 +152,18 @@ export const saveAgent = async (
 	return created[0];
 };
 
+export const updateAgentSettings = async (
+	agentId: string,
+	data: { toolConfig?: AgentToolConfig; mcpConfig?: AgentMcpConfig },
+) => {
+	const updated = await db
+		.update(agent)
+		.set(data)
+		.where(eq(agent.agentId, agentId))
+		.returning();
+	return updated[0];
+};
+
 export const findConversationsByAgentId = async (agentId: string) => {
 	return await db.query.agentConversation.findMany({
 		where: eq(agentConversation.agentId, agentId),
@@ -258,4 +273,71 @@ export const deleteConversation = async (conversationId: string) => {
 		.delete(agentConversation)
 		.where(eq(agentConversation.conversationId, conversationId));
 	return true;
+};
+
+const PENDING_ACTION_TTL_MS = 15 * 60 * 1000;
+
+export const createPendingAction = async (input: {
+	agentId: string;
+	conversationId: string;
+	channelId?: string | null;
+	externalChatId?: string | null;
+	toolName: string;
+	toolInput: unknown;
+	summary: string;
+}) => {
+	const created = await db
+		.insert(agentPendingAction)
+		.values({
+			agentId: input.agentId,
+			conversationId: input.conversationId,
+			channelId: input.channelId ?? null,
+			externalChatId: input.externalChatId ?? null,
+			toolName: input.toolName,
+			toolInput: input.toolInput ?? {},
+			summary: input.summary,
+		})
+		.returning();
+	if (!created[0]) {
+		throw new TRPCError({
+			code: "INTERNAL_SERVER_ERROR",
+			message: "Failed to create the pending action",
+		});
+	}
+	return created[0];
+};
+
+export const findPendingActionById = async (actionId: string) => {
+	const action = await db.query.agentPendingAction.findFirst({
+		where: eq(agentPendingAction.actionId, actionId),
+	});
+	if (!action) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Pending action not found",
+		});
+	}
+	return action;
+};
+
+export const isPendingActionExpired = (action: {
+	createdAt: string;
+	status: string;
+}) => {
+	if (action.status !== "pending") return false;
+	return (
+		Date.now() - new Date(action.createdAt).getTime() > PENDING_ACTION_TTL_MS
+	);
+};
+
+export const updatePendingActionStatus = async (
+	actionId: string,
+	status: "pending" | "approved" | "rejected" | "expired",
+) => {
+	const updated = await db
+		.update(agentPendingAction)
+		.set({ status })
+		.where(eq(agentPendingAction.actionId, actionId))
+		.returning();
+	return updated[0];
 };

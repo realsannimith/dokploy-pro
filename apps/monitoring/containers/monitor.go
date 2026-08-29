@@ -37,12 +37,6 @@ func (cm *ContainerMonitor) Start() error {
 		return fmt.Errorf("error loading config: %v", err)
 	}
 
-	// Check if there are services to monitor
-	if len(monitorConfig.IncludeServices) == 0 {
-		log.Printf("No services to monitor. Skipping container metrics collection")
-		return nil
-	}
-
 	metricsConfig := config.GetMetricsConfig()
 	refreshRate := metricsConfig.Containers.RefreshRate
 	if refreshRate == 0 {
@@ -54,15 +48,13 @@ func (cm *ContainerMonitor) Start() error {
 
 	ticker := time.NewTicker(duration)
 	go func() {
+		// Collect once at startup so a newly enabled monitoring page does not
+		// remain empty until the first refresh interval has elapsed.
+		cm.collectMetrics()
+
 		for {
 			select {
 			case <-ticker.C:
-				// Check again in case the configuration has changed
-				if len(monitorConfig.IncludeServices) == 0 {
-					log.Printf("No services to monitor. Stopping metrics collection")
-					ticker.Stop()
-					return
-				}
 				cm.collectMetrics()
 			case <-cm.stopChan:
 				ticker.Stop()

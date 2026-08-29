@@ -272,6 +272,7 @@ const Mariadb = (
 																	data?.server?.metricsConfig?.server?.token ||
 																	""
 																}
+																serverId={data.serverId}
 															/>
 														) : (
 															<AlertBlock type="info">

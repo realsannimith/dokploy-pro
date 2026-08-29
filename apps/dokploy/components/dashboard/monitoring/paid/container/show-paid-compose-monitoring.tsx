@@ -131,6 +131,7 @@ export const ComposePaidMonitoring = ({
 							appName={containerAppName || ""}
 							baseUrl={baseUrl}
 							token={token}
+							serverId={serverId}
 						/>
 					</div>
 				</CardContent>

@@ -34,14 +34,14 @@ func ShouldMonitorContainer(containerName string) bool {
 	}
 
 	for _, excluded := range monitorConfig.ExcludeServices {
-		if strings.Contains(containerName, excluded) {
+		if matchesService(containerName, excluded) {
 			return false
 		}
 	}
 
 	if len(monitorConfig.IncludeServices) > 0 {
 		for _, included := range monitorConfig.IncludeServices {
-			if strings.Contains(containerName, included) {
+			if matchesService(containerName, included) {
 				return true
 			}
 		}
@@ -49,6 +49,13 @@ func ShouldMonitorContainer(containerName string) bool {
 	}
 
 	return true
+}
+
+// Empty include lists have always represented "all services" in
+// ShouldMonitorContainer. Treat both "*" and the legacy empty-string sentinel
+// the same way so existing monitoring services can use that behavior too.
+func matchesService(containerName string, service string) bool {
+	return service == "" || service == "*" || strings.Contains(containerName, service)
 }
 
 func GetServiceName(containerName string) string {

@@ -1,9 +1,10 @@
 name: Build Custom Dokploy Image
 
 # Builds this fork's Dokploy image and pushes it to GitHub Container Registry
-# (ghcr.io/<owner>/<repo>:custom) on every push to canary. Uses the built-in
-# GITHUB_TOKEN — no extra secrets needed. install.sh and the in-app updater
-# pull from this image by default.
+# (ghcr.io/<owner>/<repo>:custom) on every push to canary, together with the
+# companion monitoring image (ghcr.io/<owner>/<repo>:monitoring-custom). Uses
+# the built-in GITHUB_TOKEN — no extra secrets needed. install.sh and the
+# in-app updater pull from these images by default.
 
 on:
   push:
@@ -50,3 +51,14 @@ jobs:
           tags: ${{ steps.meta.outputs.image }}:custom
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Build and push monitoring
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.monitoring
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.image }}:monitoring-custom
+          cache-from: type=gha,scope=monitoring
+          cache-to: type=gha,mode=max,scope=monitoring

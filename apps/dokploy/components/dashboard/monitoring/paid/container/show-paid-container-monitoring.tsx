@@ -1,5 +1,14 @@
-import { Cpu, HardDrive, Loader2, MemoryStick, Network } from "lucide-react";
+import {
+	Cpu,
+	HardDrive,
+	Loader2,
+	MemoryStick,
+	Network,
+	RefreshCw,
+} from "lucide-react";
 import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
 	Select,
@@ -64,9 +73,15 @@ interface Props {
 	appName: string;
 	baseUrl: string;
 	token: string;
+	serverId?: string;
 }
 
-export const ContainerPaidMonitoring = ({ appName, baseUrl, token }: Props) => {
+export const ContainerPaidMonitoring = ({
+	appName,
+	baseUrl,
+	token,
+	serverId,
+}: Props) => {
 	const [historicalData, setHistoricalData] = useState<ContainerMetric[]>([]);
 	const [metrics, setMetrics] = useState<ContainerMetric>(
 		{} as ContainerMetric,
@@ -79,6 +94,7 @@ export const ContainerPaidMonitoring = ({ appName, baseUrl, token }: Props) => {
 		data,
 		isLoading,
 		error: queryError,
+		refetch,
 	} = api.user.getContainerMetrics.useQuery(
 		{
 			url: baseUrl,
@@ -88,17 +104,28 @@ export const ContainerPaidMonitoring = ({ appName, baseUrl, token }: Props) => {
 		},
 		{
 			refetchInterval:
-				dataPoints === "all" ? undefined : Number.parseInt(refreshInterval),
+				dataPoints === "all" ? undefined : Number.parseInt(refreshInterval, 10),
 			enabled: !!appName,
 		},
 	);
+	const repairMonitoring = api.server.enableMonitoring.useMutation({
+		onSuccess: async () => {
+			toast.success(
+				"Monitoring restarted. Metrics should appear after the first sample.",
+			);
+			await refetch();
+		},
+		onError: (error) => {
+			toast.error(error.message || "Failed to restart monitoring");
+		},
+	});
 
 	useEffect(() => {
 		if (!data) return;
 
-		// @ts-ignore
+		// @ts-expect-error
 		setHistoricalData(data);
-		// @ts-ignore
+		// @ts-expect-error
 		setMetrics(data[data.length - 1]);
 	}, [data]);
 
@@ -124,6 +151,19 @@ export const ContainerPaidMonitoring = ({ appName, baseUrl, token }: Props) => {
 							: "Failed to fetch metrics, Please check your monitoring Instance is Configured correctly."}
 					</p>
 					<p className="text-sm text-muted-foreground">URL: {baseUrl}</p>
+					{serverId && (
+						<Button
+							className="mt-4"
+							variant="outline"
+							disabled={repairMonitoring.isPending}
+							onClick={() => repairMonitoring.mutate({ serverId })}
+						>
+							<RefreshCw
+								className={repairMonitoring.isPending ? "animate-spin" : ""}
+							/>
+							Repair monitoring
+						</Button>
+					)}
 				</div>
 			</div>
 		);

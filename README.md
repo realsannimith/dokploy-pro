@@ -43,7 +43,7 @@ This is a customized build of Dokploy with extra features on top of the official
 
 ### Setting up this version
 
-The image for this version is **built automatically**: every push to the `canary` branch triggers the [build-image workflow](.github/workflows/build-image.yml), which publishes `ghcr.io/realsannimith/self-dokploy:custom` to GitHub Container Registry. No Docker Hub account and no local builds needed.
+The images for this version are **built automatically**: every push to the `canary` branch triggers the [build-image workflow](.github/workflows/build-image.yml), which publishes `ghcr.io/realsannimith/self-dokploy:custom` and its companion `ghcr.io/realsannimith/self-dokploy:monitoring-custom` metrics collector to GitHub Container Registry. No Docker Hub account and no local builds are needed.
 
 **One-time:** after the first workflow run, make the package public so servers can pull it — GitHub → your profile → **Packages** → `self-dokploy` → **Package settings** → **Change visibility** → Public.
 

@@ -6,6 +6,10 @@ import superjson from "superjson";
 import { AgentChannels } from "@/components/dashboard/settings/agent/agent-channels";
 import { AgentChat } from "@/components/dashboard/settings/agent/agent-chat";
 import { AgentForm } from "@/components/dashboard/settings/agent/agent-form";
+import {
+	AgentMcp,
+	AgentTools,
+} from "@/components/dashboard/settings/agent/agent-permissions";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { appRouter } from "@/server/api/root";
 
@@ -14,6 +18,8 @@ const Page = () => {
 		<div className="flex flex-col gap-4 w-full">
 			<AgentForm />
 			<AgentChannels />
+			<AgentTools />
+			<AgentMcp />
 			<AgentChat />
 		</div>
 	);

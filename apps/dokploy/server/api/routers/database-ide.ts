@@ -20,6 +20,11 @@ import {
 	decodeDatabaseIdeMysqlField,
 	parseDatabaseIdeCsv,
 } from "@/server/api/utils/database-ide-output";
+import {
+	buildDatabaseUpdateStatement,
+	type DatabaseIdeCellValue,
+	quoteDatabaseIdentifier,
+} from "@/server/api/utils/database-ide-query";
 
 const databaseTypeSchema = z.enum(["postgres", "mysql", "mariadb", "libsql"]);
 export type DatabaseIdeType = z.infer<typeof databaseTypeSchema>;
@@ -33,7 +38,14 @@ const MAX_RESULT_ROWS = 500;
 const MAX_SCHEMA_ROWS = 10_000;
 const QUERY_TIMEOUT_MS = 30_000;
 
-type CellValue = string | number | boolean | null;
+type CellValue = DatabaseIdeCellValue;
+
+const cellValueSchema = z.union([
+	z.string().max(100_000),
+	z.number().finite(),
+	z.boolean(),
+	z.null(),
+]);
 
 interface QueryHeader {
 	name: string;
@@ -550,7 +562,20 @@ const schemaStatement = (type: DatabaseIdeType) => {
 				c.column_name AS "column",
 				c.data_type AS "dataType",
 				(c.is_nullable = 'YES') AS "nullable",
-				c.column_default AS "defaultValue"
+				c.column_default AS "defaultValue",
+				EXISTS (
+					SELECT 1
+					FROM information_schema.table_constraints tc
+					JOIN information_schema.key_column_usage kcu
+						ON kcu.constraint_catalog = tc.constraint_catalog
+						AND kcu.constraint_schema = tc.constraint_schema
+						AND kcu.constraint_name = tc.constraint_name
+					WHERE tc.constraint_type = 'PRIMARY KEY'
+						AND kcu.table_schema = t.table_schema
+						AND kcu.table_name = t.table_name
+						AND kcu.column_name = c.column_name
+				) AS "primaryKey",
+				(c.is_generated = 'NEVER' AND c.is_identity = 'NO') AS "editable"
 			FROM information_schema.tables t
 			LEFT JOIN information_schema.columns c
 				ON c.table_schema = t.table_schema
@@ -569,9 +594,11 @@ const schemaStatement = (type: DatabaseIdeType) => {
 				p.name AS "column",
 				COALESCE(p.type, '') AS "dataType",
 				(p."notnull" = 0) AS "nullable",
-				p.dflt_value AS "defaultValue"
+				p.dflt_value AS "defaultValue",
+				(COALESCE(p.pk, 0) > 0) AS "primaryKey",
+				(COALESCE(p.hidden, 0) = 0) AS "editable"
 			FROM sqlite_schema m
-			LEFT JOIN pragma_table_info(m.name) p ON true
+			LEFT JOIN pragma_table_xinfo(m.name) p ON true
 			WHERE m.type IN ('table', 'view')
 				AND m.name NOT LIKE 'sqlite_%'
 			ORDER BY m.name, p.cid
@@ -586,7 +613,9 @@ const schemaStatement = (type: DatabaseIdeType) => {
 				c.COLUMN_NAME AS \`column\`,
 				c.DATA_TYPE AS \`dataType\`,
 				(c.IS_NULLABLE = 'YES') AS \`nullable\`,
-				c.COLUMN_DEFAULT AS \`defaultValue\`
+				c.COLUMN_DEFAULT AS \`defaultValue\`,
+				(c.COLUMN_KEY = 'PRI') AS \`primaryKey\`,
+				(c.EXTRA NOT LIKE '%GENERATED%' AND c.EXTRA NOT LIKE '%auto_increment%') AS \`editable\`
 			FROM information_schema.TABLES t
 			LEFT JOIN information_schema.COLUMNS c
 				ON c.TABLE_SCHEMA = t.TABLE_SCHEMA
@@ -608,8 +637,10 @@ const loadSchema = async (service: DatabaseServiceConnection) => {
 			columns: Array<{
 				dataType: string;
 				defaultValue: CellValue;
+				editable: boolean;
 				name: string;
 				nullable: boolean;
+				primaryKey: boolean;
 			}>;
 			kind: string;
 			name: string;
@@ -636,6 +667,12 @@ const loadSchema = async (service: DatabaseServiceConnection) => {
 			table.columns.push({
 				dataType: String(row.dataType ?? "unknown"),
 				defaultValue: row.defaultValue ?? null,
+				editable:
+					row.editable === true ||
+					row.editable === 1 ||
+					row.editable === "1" ||
+					row.editable === "t" ||
+					row.editable === "true",
 				name: String(row.column),
 				nullable:
 					row.nullable === true ||
@@ -643,6 +680,12 @@ const loadSchema = async (service: DatabaseServiceConnection) => {
 					row.nullable === "1" ||
 					row.nullable === "t" ||
 					row.nullable === "true",
+				primaryKey:
+					row.primaryKey === true ||
+					row.primaryKey === 1 ||
+					row.primaryKey === "1" ||
+					row.primaryKey === "t" ||
+					row.primaryKey === "true",
 			});
 		}
 	}
@@ -652,11 +695,6 @@ const loadSchema = async (service: DatabaseServiceConnection) => {
 		tables: [...tables.values()],
 	};
 };
-
-const quoteIdentifier = (type: DatabaseIdeType, identifier: string) =>
-	type === "postgres" || type === "libsql"
-		? `"${identifier.replaceAll('"', '""')}"`
-		: `\`${identifier.replaceAll("`", "``")}\``;
 
 const handleDatabaseError = (error: unknown): never => {
 	if (error instanceof TRPCError) throw error;
@@ -702,8 +740,116 @@ export const databaseIdeRouter = createTRPCRouter({
 				);
 				assertOrganizationAccess(service, ctx.session.activeOrganizationId);
 
-				const statement = `SELECT * FROM ${quoteIdentifier(service.type, input.schema)}.${quoteIdentifier(service.type, input.table)} LIMIT ${input.limit}`;
+				const statement = `SELECT * FROM ${quoteDatabaseIdentifier(service.type, input.schema)}.${quoteDatabaseIdentifier(service.type, input.table)} LIMIT ${input.limit}`;
 				return await runDatabaseQuery(service, statement);
+			} catch (error) {
+				return handleDatabaseError(error);
+			}
+		}),
+
+	updateRow: protectedProcedure
+		.input(
+			databaseInputSchema.extend({
+				schema: z.string().min(1).max(128),
+				table: z.string().min(1).max(128),
+				primaryKey: z.record(z.string().min(1).max(128), cellValueSchema),
+				changes: z.record(z.string().min(1).max(128), cellValueSchema),
+			}),
+		)
+		.mutation(async ({ input, ctx }) => {
+			try {
+				await checkServicePermissionAndAccess(ctx, input.databaseId, {
+					service: ["create"],
+				});
+				const service = await getDatabaseService(
+					input.databaseType,
+					input.databaseId,
+				);
+				assertOrganizationAccess(service, ctx.session.activeOrganizationId);
+
+				const schema = await loadSchema(service);
+				const table = schema.tables.find(
+					(candidate) =>
+						candidate.schema === input.schema && candidate.name === input.table,
+				);
+				if (!table || table.kind.includes("VIEW")) {
+					throw new TRPCError({
+						code: "PRECONDITION_FAILED",
+						message: "Only database tables can be edited",
+					});
+				}
+
+				const primaryKeyColumns = table.columns.filter(
+					(column) => column.primaryKey,
+				);
+				if (primaryKeyColumns.length === 0) {
+					throw new TRPCError({
+						code: "PRECONDITION_FAILED",
+						message:
+							"This table needs a primary key before rows can be edited safely",
+					});
+				}
+				if (
+					Object.keys(input.primaryKey).length !== primaryKeyColumns.length ||
+					!primaryKeyColumns.every((column) =>
+						Object.hasOwn(input.primaryKey, column.name),
+					)
+				) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "The row primary key is incomplete",
+					});
+				}
+				if (Object.values(input.primaryKey).some((value) => value === null)) {
+					throw new TRPCError({
+						code: "PRECONDITION_FAILED",
+						message: "Rows with an empty primary key cannot be edited safely",
+					});
+				}
+
+				const changes = Object.entries(input.changes);
+				if (changes.length === 0 || changes.length > table.columns.length) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: "Select at least one valid column to update",
+					});
+				}
+				for (const [columnName] of changes) {
+					const column = table.columns.find(
+						(candidate) => candidate.name === columnName,
+					);
+					if (!column?.editable || column.primaryKey) {
+						throw new TRPCError({
+							code: "BAD_REQUEST",
+							message: `Column "${columnName}" cannot be edited`,
+						});
+					}
+				}
+
+				const statement = buildDatabaseUpdateStatement({
+					type: service.type,
+					schema: table.schema,
+					table: table.name,
+					primaryKey: input.primaryKey,
+					changes: input.changes,
+				});
+				const result = await runDatabaseQuery(service, statement);
+
+				await audit(ctx, {
+					action: "update",
+					resourceType: "service",
+					resourceId: service.id,
+					resourceName: service.appName,
+					metadata: {
+						databaseType: service.type,
+						source: "database-ide-row-editor",
+						schema: table.schema,
+						table: table.name,
+						columns: changes.map(([column]) => column),
+					},
+				});
+
+				return result;
 			} catch (error) {
 				return handleDatabaseError(error);
 			}

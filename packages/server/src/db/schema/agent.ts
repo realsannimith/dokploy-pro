@@ -7,6 +7,21 @@ import { organization } from "./account";
 import { ai } from "./ai";
 import { user } from "./user";
 
+export interface AgentToolSetting {
+	enabled?: boolean;
+	confirm?: boolean;
+}
+
+/** Per-tool overrides; a missing entry means the tool's defaults apply. */
+export type AgentToolConfig = Record<string, AgentToolSetting>;
+
+export interface AgentMcpConfig {
+	enabled?: boolean;
+	mode?: "full" | "read-only" | "custom";
+	/** Routers (tRPC namespaces) hidden from MCP when mode is "custom". */
+	disabledRouters?: string[];
+}
+
 export const agent = pgTable("agent", {
 	agentId: text("agentId")
 		.notNull()
@@ -27,6 +42,11 @@ export const agent = pgTable("agent", {
 		.notNull()
 		.unique()
 		.references(() => organization.id, { onDelete: "cascade" }),
+	toolConfig: jsonb("toolConfig")
+		.$type<AgentToolConfig>()
+		.notNull()
+		.default({}),
+	mcpConfig: jsonb("mcpConfig").$type<AgentMcpConfig>().notNull().default({}),
 	createdAt: text("createdAt")
 		.notNull()
 		.$defaultFn(() => new Date().toISOString()),
@@ -142,6 +162,36 @@ export const agentMessage = pgTable("agent_message", {
 		.$defaultFn(() => new Date().toISOString()),
 });
 
+export const agentPendingAction = pgTable("agent_pending_action", {
+	actionId: text("actionId")
+		.notNull()
+		.primaryKey()
+		.$defaultFn(() => nanoid()),
+	agentId: text("agentId")
+		.notNull()
+		.references(() => agent.agentId, { onDelete: "cascade" }),
+	conversationId: text("conversationId")
+		.notNull()
+		.references(() => agentConversation.conversationId, {
+			onDelete: "cascade",
+		}),
+	channelId: text("channelId").references(() => agentChannel.channelId, {
+		onDelete: "cascade",
+	}),
+	/** Chat the confirmation buttons were sent to, to verify the click origin. */
+	externalChatId: text("externalChatId"),
+	toolName: text("toolName").notNull(),
+	toolInput: jsonb("toolInput").notNull().default({}),
+	summary: text("summary").notNull(),
+	status: text("status")
+		.$type<"pending" | "approved" | "rejected" | "expired">()
+		.notNull()
+		.default("pending"),
+	createdAt: text("createdAt")
+		.notNull()
+		.$defaultFn(() => new Date().toISOString()),
+});
+
 export const agentRelations = relations(agent, ({ one, many }) => ({
 	organization: one(organization, {
 		fields: [agent.organizationId],
@@ -236,6 +286,20 @@ export const apiSaveAgentChannel = z.object({
 	isEnabled: z.boolean().default(false),
 	credentials: agentChannelCredentialsSchema.default({}),
 	allowedIdentifiers: z.string().optional(),
+});
+
+export const apiSaveAgentToolConfig = z.record(
+	z.string(),
+	z.object({
+		enabled: z.boolean().optional(),
+		confirm: z.boolean().optional(),
+	}),
+);
+
+export const apiSaveAgentMcpConfig = z.object({
+	enabled: z.boolean(),
+	mode: z.enum(["full", "read-only", "custom"]),
+	disabledRouters: z.array(z.string()).default([]),
 });
 
 export const apiAgentChat = z.object({
