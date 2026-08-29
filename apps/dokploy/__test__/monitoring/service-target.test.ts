@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	checkServiceAccess: vi.fn(),
+	execAsyncRemote: vi.fn(),
 	findApplicationById: vi.fn(),
 	findComposeById: vi.fn(),
 	findLibsqlById: vi.fn(),
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@dokploy/server", () => ({
+	execAsyncRemote: mocks.execAsyncRemote,
 	findApplicationById: mocks.findApplicationById,
 	findComposeById: mocks.findComposeById,
 	findLibsqlById: mocks.findLibsqlById,
@@ -33,8 +35,11 @@ vi.mock("@dokploy/server/services/permission", () => ({
 	checkServiceAccess: mocks.checkServiceAccess,
 }));
 
-const { redactServiceMonitoringToken, resolveContainerMonitoringTarget } =
-	await import("@/server/api/utils/monitoring");
+const {
+	fetchMonitoringData,
+	redactServiceMonitoringToken,
+	resolveContainerMonitoringTarget,
+} = await import("@/server/api/utils/monitoring");
 
 const ctx = {
 	user: { id: "user-1" },
@@ -60,6 +65,10 @@ describe("service-scoped remote monitoring", () => {
 		});
 	});
 
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
 	it("lets a service-authorized user resolve remote metrics without server access", async () => {
 		await expect(
 			resolveContainerMonitoringTarget(ctx, {
@@ -71,8 +80,36 @@ describe("service-scoped remote monitoring", () => {
 			url: "http://10.0.0.5:4500/metrics/containers",
 			token: "server-secret",
 			containerName: "app-api-123",
+			serverId: "server-1",
 		});
 		expect(mocks.checkServiceAccess).toHaveBeenCalledWith(ctx, "app-1", "read");
+	});
+
+	it("falls back to SSH without putting the monitoring token in the command", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn().mockRejectedValue(new Error("blocked port")),
+		);
+		mocks.execAsyncRemote.mockResolvedValue({
+			stdout: `${JSON.stringify([{ cpu: "1.2" }])}\n200`,
+			stderr: "",
+		});
+
+		await expect(
+			fetchMonitoringData(
+				{
+					url: "http://10.0.0.5:4500/metrics",
+					token: "server-secret",
+					serverId: "server-ssh-fallback",
+				},
+				{ limit: "50" },
+			),
+		).resolves.toEqual([{ cpu: "1.2" }]);
+
+		const [, command, , input] = mocks.execAsyncRemote.mock.calls[0] ?? [];
+		expect(command).toContain("http://127.0.0.1:4500/metrics?limit=50");
+		expect(command).not.toContain("server-secret");
+		expect(input).toBe(Buffer.from("server-secret").toString("base64"));
 	});
 
 	it("redacts monitoring tokens from service detail responses", () => {

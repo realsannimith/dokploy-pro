@@ -56,8 +56,6 @@ interface SystemMetrics {
 interface Props {
 	/** Remote server to read metrics from. Omit to read the Dokploy server. */
 	serverId?: string;
-	BASE_URL?: string;
-	token?: string;
 }
 
 const barColor = (pct: number) => {
@@ -108,7 +106,7 @@ const Stat = ({ label, value, unit, meta, percent }: StatProps) => {
 	);
 };
 
-export const ShowPaidMonitoring = ({ serverId, BASE_URL, token }: Props) => {
+export const ShowPaidMonitoring = ({ serverId }: Props) => {
 	const [historicalData, setHistoricalData] = useState<SystemMetrics[]>([]);
 	const [metrics, setMetrics] = useState<SystemMetrics>({} as SystemMetrics);
 	const [dataPoints, setDataPoints] =
@@ -122,13 +120,11 @@ export const ShowPaidMonitoring = ({ serverId, BASE_URL, token }: Props) => {
 	} = api.server.getServerMetrics.useQuery(
 		{
 			serverId,
-			url: BASE_URL,
-			token,
 			dataPoints,
 		},
 		{
 			refetchInterval:
-				dataPoints === "all" ? undefined : Number.parseInt(refreshInterval),
+				dataPoints === "all" ? undefined : Number.parseInt(refreshInterval, 10),
 			enabled: true,
 		},
 	);
@@ -136,7 +132,7 @@ export const ShowPaidMonitoring = ({ serverId, BASE_URL, token }: Props) => {
 	useEffect(() => {
 		setHistoricalData([]);
 		setMetrics({} as SystemMetrics);
-	}, [serverId, BASE_URL]);
+	}, [serverId]);
 
 	useEffect(() => {
 		if (!data) return;
@@ -195,9 +191,6 @@ export const ShowPaidMonitoring = ({ serverId, BASE_URL, token }: Props) => {
 						? queryError.message
 						: "Could not reach the monitoring instance."}
 				</p>
-				{BASE_URL && (
-					<p className="font-mono text-xs text-muted-foreground">{BASE_URL}</p>
-				)}
 			</div>
 		);
 	}

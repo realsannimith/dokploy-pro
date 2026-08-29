@@ -38,7 +38,11 @@ import { and, asc, desc, eq, gt, ne } from "drizzle-orm";
 import { z } from "zod";
 import { apiKeyNameSchema } from "@/lib/api-keys";
 import { audit } from "@/server/api/utils/audit";
-import { resolveContainerMonitoringTarget } from "@/server/api/utils/monitoring";
+import {
+	fetchMonitoringData,
+	MONITORING_DATA_POINTS,
+	resolveContainerMonitoringTarget,
+} from "@/server/api/utils/monitoring";
 import {
 	adminProcedure,
 	createTRPCRouter,
@@ -543,36 +547,16 @@ export const userRouter = createTRPCRouter({
 					.max(255)
 					.regex(/^[a-zA-Z0-9._-]+$/, "Invalid container name")
 					.optional(),
-				dataPoints: z.enum([
-					"50",
-					"200",
-					"500",
-					"800",
-					"1200",
-					"1600",
-					"2000",
-					"all",
-				]),
+				dataPoints: z.enum(MONITORING_DATA_POINTS),
 			}),
 		)
 		.query(async ({ input, ctx }) => {
 			try {
 				const target = await resolveContainerMonitoringTarget(ctx, input);
-				const url = new URL(target.url);
-				url.searchParams.append("limit", input.dataPoints);
-				url.searchParams.append("appName", target.containerName);
-				const response = await fetch(url.toString(), {
-					headers: {
-						Authorization: `Bearer ${target.token}`,
-					},
+				const data = await fetchMonitoringData(target, {
+					limit: input.dataPoints,
+					appName: target.containerName,
 				});
-				if (!response.ok) {
-					throw new Error(
-						`Error ${response.status}: ${response.statusText}. Verify that the service is running and included in the monitoring configuration.`,
-					);
-				}
-
-				const data = await response.json();
 				if (!Array.isArray(data) || data.length === 0) {
 					throw new Error(
 						[

@@ -19,7 +19,6 @@ const DOKPLOY_SERVER = "dokploy-server";
 // Escape hatch for local development, where the metrics container is usually
 // reachable on localhost instead of the configured server IP.
 const DEV_METRICS_URL = process.env.NEXT_PUBLIC_METRICS_URL;
-const DEV_METRICS_TOKEN = process.env.NEXT_PUBLIC_METRICS_TOKEN;
 
 interface ServerTabProps {
 	name: string;
@@ -139,12 +138,7 @@ const Dashboard = () => {
 				);
 			}
 
-			return (
-				<ShowPaidMonitoring
-					BASE_URL={DEV_METRICS_URL}
-					token={DEV_METRICS_TOKEN}
-				/>
-			);
+			return <ShowPaidMonitoring />;
 		}
 
 		if (!remoteServer) {

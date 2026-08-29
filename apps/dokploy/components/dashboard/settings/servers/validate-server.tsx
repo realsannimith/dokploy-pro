@@ -77,6 +77,13 @@ export const ValidateServer = ({ serverId }: Props) => {
 							</div>
 						) : (
 							<div className="grid w-full gap-4">
+								<AlertBlock
+									type={data?.allFeaturesReady ? "success" : "warning"}
+								>
+									{data?.allFeaturesReady
+										? "This server is ready for all Dokploy remote-control features."
+										: "Some required capabilities are missing. Re-run Setup Server, then refresh this validation."}
+								</AlertBlock>
 								<div className="border rounded-lg p-4">
 									<h3 className="text-lg font-semibold mb-1">Status</h3>
 									<p className="text-sm text-muted-foreground mb-4">
@@ -86,12 +93,35 @@ export const ValidateServer = ({ serverId }: Props) => {
 									</p>
 									<div className="grid gap-2.5">
 										<StatusRow
+											label="SSH Connection"
+											isEnabled={data?.sshConnected}
+											description="Connected"
+										/>
+										<StatusRow
 											label="Docker Installed"
 											isEnabled={data?.docker?.enabled}
 											description={
 												data?.docker?.enabled
 													? `Installed: ${data?.docker?.version}`
 													: undefined
+											}
+										/>
+										<StatusRow
+											label="Docker Daemon Access"
+											isEnabled={data?.docker?.daemonAccessible}
+											description={
+												data?.docker?.daemonAccessible
+													? "Accessible"
+													: "Permission denied or daemon unavailable"
+											}
+										/>
+										<StatusRow
+											label="Docker Compose"
+											isEnabled={data?.dockerCompose?.enabled}
+											description={
+												data?.dockerCompose?.enabled
+													? `Installed: ${data.dockerCompose.version}`
+													: "Compose plugin unavailable"
 											}
 										/>
 										{!isBuildServer && (
@@ -163,6 +193,59 @@ export const ValidateServer = ({ serverId }: Props) => {
 													: "Not Created"
 											}
 										/>
+										<StatusRow
+											label="Dokploy Directory Writable"
+											isEnabled={data?.dokployDirectoryWritable}
+											description={
+												data?.dokployDirectoryWritable
+													? "Writable"
+													: "Write permission missing"
+											}
+										/>
+										{!isBuildServer && (
+											<>
+												<StatusRow
+													label="Traefik"
+													isEnabled={data?.traefik?.running}
+													description={
+														data?.traefik?.running
+															? "Installed and running"
+															: data?.traefik?.installed
+																? "Installed but stopped"
+																: "Not installed"
+													}
+												/>
+												<StatusRow
+													label="Monitoring Configuration"
+													isEnabled={data?.monitoring?.configured}
+													description={
+														data?.monitoring?.configured
+															? "Configured"
+															: "Not configured"
+													}
+												/>
+												<StatusRow
+													label="Monitoring Service"
+													isEnabled={data?.monitoring?.running}
+													description={
+														data?.monitoring?.running
+															? "Running"
+															: data?.monitoring?.serviceInstalled
+																? "Installed but not running"
+																: "Not installed"
+													}
+												/>
+												<StatusRow
+													label="Monitoring API"
+													isEnabled={data?.monitoring?.localReachable}
+													description={
+														data?.monitoring?.localReachable
+															? "Reachable directly or through SSH"
+															: "Agent API unavailable"
+													}
+												/>
+											</>
+										)}
 										<StatusRow
 											label="Privilege Mode"
 											isEnabled={

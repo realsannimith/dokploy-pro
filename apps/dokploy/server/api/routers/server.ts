@@ -8,7 +8,6 @@ import {
 	findUserById,
 	getAccessibleServerIds,
 	getPublicIpWithFallback,
-	getWebServerSettings,
 	haveActiveServices,
 	IS_CLOUD,
 	redactServerSshKey,
@@ -33,6 +32,11 @@ import {
 } from "@/server/api/trpc";
 import { audit } from "@/server/api/utils/audit";
 import {
+	fetchMonitoringData,
+	MONITORING_DATA_POINTS,
+	resolveServerMonitoringTarget,
+} from "@/server/api/utils/monitoring";
+import {
 	apiCreateServer,
 	apiFindOneServer,
 	apiRemoveServer,
@@ -50,67 +54,6 @@ import {
 	server,
 } from "@/server/db/schema";
 import { applyDockerCleanupSchedule } from "@/server/utils/docker-cleanup";
-
-type MetricsSession = { userId: string; activeOrganizationId: string };
-
-const resolveMetricsEndpoint = async (
-	input: { serverId?: string; url?: string; token?: string },
-	session: MetricsSession,
-) => {
-	if (input.url) {
-		return { url: input.url, token: input.token ?? "" };
-	}
-
-	if (input.serverId) {
-		const targetServer = await findServerById(input.serverId);
-		const accessibleIds = await getAccessibleServerIds(session);
-		if (
-			targetServer.organizationId !== session.activeOrganizationId ||
-			!accessibleIds.has(input.serverId)
-		) {
-			throw new TRPCError({
-				code: "UNAUTHORIZED",
-				message: "You are not authorized to access this server",
-			});
-		}
-
-		const metrics = targetServer.metricsConfig?.server;
-		if (!metrics?.token) {
-			throw new TRPCError({
-				code: "PRECONDITION_FAILED",
-				message: `Monitoring is not enabled on "${targetServer.name}". Go to Settings > Servers > Setup Server > Monitoring and save the configuration to start collecting metrics.`,
-			});
-		}
-
-		return {
-			url: `http://${targetServer.ipAddress}:${metrics.port}/metrics`,
-			token: metrics.token,
-		};
-	}
-
-	const settings = await getWebServerSettings();
-	const metrics = settings?.metricsConfig?.server;
-	if (!metrics?.token) {
-		throw new TRPCError({
-			code: "PRECONDITION_FAILED",
-			message:
-				"Monitoring is not enabled on the Dokploy server. Go to Settings > Server > Monitoring and save the configuration to start collecting metrics.",
-		});
-	}
-
-	if (!settings?.serverIp) {
-		throw new TRPCError({
-			code: "PRECONDITION_FAILED",
-			message:
-				"The Dokploy server IP is not set, so the metrics service cannot be reached. Set it in Settings > Server > Web Server.",
-		});
-	}
-
-	return {
-		url: `http://${settings.serverIp}:${metrics.port}/metrics`,
-		token: metrics.token,
-	};
-};
 
 export const serverRouter = createTRPCRouter({
 	create: withPermission("server", "create")
@@ -337,34 +280,7 @@ export const serverRouter = createTRPCRouter({
 						message: "You are not authorized to validate this server",
 					});
 				}
-				const response = await serverValidate(input.serverId);
-				return response as unknown as {
-					docker: {
-						enabled: boolean;
-						version: string;
-					};
-					rclone: {
-						enabled: boolean;
-						version: string;
-					};
-					nixpacks: {
-						enabled: boolean;
-						version: string;
-					};
-					buildpacks: {
-						enabled: boolean;
-						version: string;
-					};
-					railpack: {
-						enabled: boolean;
-						version: string;
-					};
-					isDokployNetworkInstalled: boolean;
-					isSwarmInstalled: boolean;
-					isMainDirectoryInstalled: boolean;
-					privilegeMode: string;
-					dockerGroupMember: boolean;
-				};
+				return await serverValidate(input.serverId);
 			} catch (error) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
@@ -645,28 +561,18 @@ export const serverRouter = createTRPCRouter({
 		.input(
 			z.object({
 				serverId: z.string().optional(),
-				url: z.string().optional(),
-				token: z.string().optional(),
-				dataPoints: z.string(),
+				dataPoints: z.enum(MONITORING_DATA_POINTS),
 			}),
 		)
 		.query(async ({ input, ctx }) => {
-			const endpoint = await resolveMetricsEndpoint(input, ctx.session);
+			const endpoint = await resolveServerMonitoringTarget(
+				input.serverId,
+				ctx.session,
+			);
 			try {
-				const url = new URL(endpoint.url);
-				url.searchParams.append("limit", input.dataPoints);
-				const response = await fetch(url.toString(), {
-					headers: {
-						Authorization: `Bearer ${endpoint.token}`,
-					},
+				const data = await fetchMonitoringData(endpoint, {
+					limit: input.dataPoints,
 				});
-				if (!response.ok) {
-					throw new Error(
-						`Error ${response.status}: ${response.statusText}. Ensure the container is running and this service is included in the monitoring configuration.`,
-					);
-				}
-
-				const data = await response.json();
 				if (!Array.isArray(data) || data.length === 0) {
 					throw new Error(
 						[

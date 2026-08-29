@@ -63,6 +63,11 @@ export const AGENT_TOOL_META: AgentToolMeta[] = [
 	},
 	{ name: "listServers", group: "Read", description: "List remote servers" },
 	{
+		name: "inspectServer",
+		group: "Read",
+		description: "Check remote-server readiness, health, and monitoring",
+	},
+	{
 		name: "listContainers",
 		group: "Read",
 		description: "List docker containers",
@@ -1025,6 +1030,55 @@ export const buildAgentTools = (
 							]),
 						),
 					);
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		inspectServer: tool({
+			description:
+				"Inspect whether a remote server is fully ready for Dokploy. Checks SSH, Docker and Compose, build tools, storage permissions, Swarm/networking, Traefik, monitoring, host health, and the latest metric sample.",
+			inputSchema: z.object({
+				serverId: z.string().min(1).describe("Get it from listServers"),
+			}),
+			execute: async ({ serverId }) => {
+				try {
+					const [validationResult, healthResult, metricsResult] =
+						await Promise.allSettled([
+							caller.server.validate({ serverId }),
+							caller.docker.getServerHealth({ serverId, sinceHours: 24 }),
+							caller.server.getServerMetrics({
+								serverId,
+								dataPoints: "50",
+							}),
+						]);
+
+					const validation =
+						validationResult.status === "fulfilled"
+							? validationResult.value
+							: { error: toErrorResult(validationResult.reason) };
+					const health =
+						healthResult.status === "fulfilled"
+							? healthResult.value
+							: { error: toErrorResult(healthResult.reason) };
+					const samples =
+						metricsResult.status === "fulfilled" ? metricsResult.value : [];
+					const latestMetric = Array.isArray(samples)
+						? samples.at(-1)
+						: undefined;
+
+					return toResult({
+						serverId,
+						validation,
+						health,
+						monitoring:
+							metricsResult.status === "fulfilled"
+								? { available: true, latestMetric }
+								: {
+										available: false,
+										error: toErrorResult(metricsResult.reason),
+									},
+					});
 				} catch (error) {
 					return toErrorResult(error);
 				}
