@@ -5,6 +5,7 @@ import {
 	redis,
 } from "@dokploy/server/db/schema";
 import { generatePassword } from "@dokploy/server/templates";
+import { waitForDatabaseServiceRunning } from "@dokploy/server/utils/databases/readiness";
 import { buildRedis } from "@dokploy/server/utils/databases/redis";
 import { pullImage } from "@dokploy/server/utils/docker/utils";
 import { execAsyncRemote } from "@dokploy/server/utils/process/execAsync";
@@ -119,6 +120,8 @@ export const deployRedis = async (
 		}
 
 		await buildRedis(redis);
+		onData?.("Waiting for the Redis container to start...");
+		await waitForDatabaseServiceRunning(redis.appName, redis.serverId);
 		await updateRedisById(redisId, {
 			applicationStatus: "done",
 		});

@@ -7,6 +7,7 @@ import {
 	findMySqlById,
 	findPostgresById,
 	getRemoteDocker,
+	waitForDatabaseServiceRunning,
 } from "@dokploy/server";
 import {
 	checkServiceAccess,
@@ -168,21 +169,24 @@ const findRunningContainer = async (
 	}
 
 	const client = docker ?? (await getRemoteDocker(service.serverId));
-	const containers = await client.listContainers({
-		filters: JSON.stringify({
-			label: [`com.docker.swarm.service.name=${service.appName}`],
-			status: ["running"],
-		}),
-	});
-	const container = containers[0];
-	if (!container) {
+	try {
+		return await waitForDatabaseServiceRunning(
+			service.appName,
+			service.serverId,
+			{
+				docker: client,
+				timeoutMs: 10_000,
+			},
+		);
+	} catch (error) {
 		throw new TRPCError({
 			code: "PRECONDITION_FAILED",
-			message: "The database container is not running",
+			message:
+				error instanceof Error
+					? error.message
+					: "The database container is not running",
 		});
 	}
-
-	return container;
 };
 
 interface ContainerCommandOptions {

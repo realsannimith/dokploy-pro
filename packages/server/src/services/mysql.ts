@@ -7,6 +7,7 @@ import {
 } from "@dokploy/server/db/schema";
 import { generatePassword } from "@dokploy/server/templates";
 import { buildMysql } from "@dokploy/server/utils/databases/mysql";
+import { waitForDatabaseServiceRunning } from "@dokploy/server/utils/databases/readiness";
 import { pullImage } from "@dokploy/server/utils/docker/utils";
 import { execAsyncRemote } from "@dokploy/server/utils/process/execAsync";
 import { TRPCError } from "@trpc/server";
@@ -152,6 +153,8 @@ export const deployMySql = async (
 		}
 
 		await buildMysql(mysql);
+		onData?.("Waiting for the MySQL container to start...");
+		await waitForDatabaseServiceRunning(mysql.appName, mysql.serverId);
 		await updateMySqlById(mysqlId, {
 			applicationStatus: "done",
 		});

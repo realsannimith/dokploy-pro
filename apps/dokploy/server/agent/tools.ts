@@ -427,6 +427,26 @@ export const buildAgentTools = (
 		}
 	};
 
+	const deployDatabase = async (
+		databaseType: DatabaseType,
+		serviceId: string,
+	) => {
+		switch (databaseType) {
+			case "postgres":
+				return await caller.postgres.deploy({ postgresId: serviceId });
+			case "mysql":
+				return await caller.mysql.deploy({ mysqlId: serviceId });
+			case "mariadb":
+				return await caller.mariadb.deploy({ mariadbId: serviceId });
+			case "mongo":
+				return await caller.mongo.deploy({ mongoId: serviceId });
+			case "redis":
+				return await caller.redis.deploy({ redisId: serviceId });
+			case "libsql":
+				return await caller.libsql.deploy({ libsqlId: serviceId });
+		}
+	};
+
 	const allTools = {
 		searchDokployTools: tool({
 			description:
@@ -712,7 +732,7 @@ export const buildAgentTools = (
 		}),
 		deployService: tool({
 			description:
-				"Trigger a deployment for a service. For applications/compose this queues a build+deploy (visible in the dashboard's deployments tab). For databases this (re)creates the container.",
+				"Trigger a deployment for a service. For applications/compose this queues a build+deploy (visible in the dashboard's deployments tab). For databases this waits until Docker confirms that the container is running.",
 			inputSchema: z.object({
 				serviceType: serviceTypeSchema,
 				serviceId: z.string(),
@@ -730,26 +750,18 @@ export const buildAgentTools = (
 							await caller.compose.deploy({ composeId: serviceId } as any);
 							break;
 						case "postgres":
-							await caller.postgres.deploy({ postgresId: serviceId });
-							break;
 						case "mysql":
-							await caller.mysql.deploy({ mysqlId: serviceId });
-							break;
 						case "mariadb":
-							await caller.mariadb.deploy({ mariadbId: serviceId });
-							break;
 						case "mongo":
-							await caller.mongo.deploy({ mongoId: serviceId });
-							break;
 						case "redis":
-							await caller.redis.deploy({ redisId: serviceId });
-							break;
 						case "libsql":
-							await caller.libsql.deploy({ libsqlId: serviceId });
+							await deployDatabase(serviceType, serviceId);
 							break;
 					}
 					return toResult(
-						"Deployment queued. Use listDeployments to check its status.",
+						serviceType === "application" || serviceType === "compose"
+							? "Deployment queued. Use listDeployments to check its status."
+							: "Database deployment verified: its container is running.",
 					);
 				} catch (error) {
 					return toErrorResult(error);
@@ -1159,7 +1171,7 @@ export const buildAgentTools = (
 		}),
 		createDatabase: tool({
 			description:
-				"Create a new database service (postgres, mysql, mariadb, mongo, redis or libsql) in an environment. Credentials are auto-generated when omitted and returned once — share them with the user. The database is created but NOT started; call deployService with the returned serviceId to actually start it.",
+				"Create and start a new database service (postgres, mysql, mariadb, mongo, redis or libsql) in an environment. Credentials are auto-generated when omitted and returned once — share them with the user. Success is reported only after Docker confirms that its container is running.",
 			inputSchema: z.object({
 				environmentId: z
 					.string()
@@ -1269,11 +1281,28 @@ export const buildAgentTools = (
 						created && typeof created === "object"
 							? created[serviceIdField[databaseType]]
 							: undefined;
+					if (!serviceId || typeof serviceId !== "string") {
+						throw new Error(
+							"The database record was created but its service id was not returned",
+						);
+					}
+
+					let deploymentError: string | undefined;
+					try {
+						await deployDatabase(databaseType, serviceId);
+					} catch (error) {
+						deploymentError =
+							error instanceof Error ? error.message : String(error);
+					}
+					const actualAppName =
+						created && typeof created === "object" && created.appName
+							? created.appName
+							: appName;
 					return toResult({
 						serviceType: databaseType,
-						serviceId: serviceId ?? "(created — find the id with listProjects)",
+						serviceId,
 						name,
-						appName,
+						appName: actualAppName,
 						credentials: {
 							...(databaseUser ? { user: databaseUser } : {}),
 							password: databasePassword,
@@ -1284,8 +1313,12 @@ export const buildAgentTools = (
 								: {}),
 							...(rootPassword ? { rootPassword } : {}),
 						},
-						deployed: false,
-						next: "Call deployService with this serviceType/serviceId to start the database.",
+						deployed: !deploymentError,
+						status: deploymentError ? "error" : "running",
+						...(deploymentError ? { deploymentError } : {}),
+						next: deploymentError
+							? "The record and credentials were created, but deployment failed. Inspect the reported Swarm task error before retrying deployService."
+							: "The database container is running and ready for the Database IDE.",
 					});
 				} catch (error) {
 					return toErrorResult(error);

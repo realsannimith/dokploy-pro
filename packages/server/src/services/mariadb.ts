@@ -7,6 +7,7 @@ import {
 } from "@dokploy/server/db/schema";
 import { generatePassword } from "@dokploy/server/templates";
 import { buildMariadb } from "@dokploy/server/utils/databases/mariadb";
+import { waitForDatabaseServiceRunning } from "@dokploy/server/utils/databases/readiness";
 import { pullImage } from "@dokploy/server/utils/docker/utils";
 import { execAsyncRemote } from "@dokploy/server/utils/process/execAsync";
 import { TRPCError } from "@trpc/server";
@@ -154,6 +155,8 @@ export const deployMariadb = async (
 		}
 
 		await buildMariadb(mariadb);
+		onData?.("Waiting for the MariaDB container to start...");
+		await waitForDatabaseServiceRunning(mariadb.appName, mariadb.serverId);
 		await updateMariadbById(mariadbId, {
 			applicationStatus: "done",
 		});

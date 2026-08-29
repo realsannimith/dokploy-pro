@@ -7,6 +7,7 @@ import {
 } from "@dokploy/server/db/schema";
 import { generatePassword } from "@dokploy/server/templates";
 import { buildLibsql } from "@dokploy/server/utils/databases/libsql";
+import { waitForDatabaseServiceRunning } from "@dokploy/server/utils/databases/readiness";
 import { pullImage } from "@dokploy/server/utils/docker/utils";
 import { execAsyncRemote } from "@dokploy/server/utils/process/execAsync";
 import { TRPCError } from "@trpc/server";
@@ -149,6 +150,8 @@ export const deployLibsql = async (
 		}
 
 		await buildLibsql(libsql);
+		onData?.("Waiting for the LibSQL container to start...");
+		await waitForDatabaseServiceRunning(libsql.appName, libsql.serverId);
 		await updateLibsqlById(libsqlId, {
 			applicationStatus: "done",
 		});

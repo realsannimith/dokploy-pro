@@ -8,6 +8,7 @@ import {
 } from "@dokploy/server/db/schema";
 import { generatePassword } from "@dokploy/server/templates";
 import { buildMongo } from "@dokploy/server/utils/databases/mongo";
+import { waitForDatabaseServiceRunning } from "@dokploy/server/utils/databases/readiness";
 import { pullImage } from "@dokploy/server/utils/docker/utils";
 import { execAsyncRemote } from "@dokploy/server/utils/process/execAsync";
 import { TRPCError } from "@trpc/server";
@@ -169,6 +170,8 @@ export const deployMongo = async (
 		}
 
 		await buildMongo(mongo);
+		onData?.("Waiting for the MongoDB container to start...");
+		await waitForDatabaseServiceRunning(mongo.appName, mongo.serverId);
 		await updateMongoById(mongoId, {
 			applicationStatus: "done",
 		});
