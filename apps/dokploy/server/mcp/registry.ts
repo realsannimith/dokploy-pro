@@ -1,4 +1,4 @@
-import { generateOpenApiDocument } from "@dokploy/trpc-openapi";
+import { z } from "zod";
 import { appRouter } from "@/server/api/root";
 
 export interface McpToolDef {
@@ -8,11 +8,19 @@ export interface McpToolDef {
 		type: "object";
 		properties: Record<string, unknown>;
 		required?: string[];
-		additionalProperties?: boolean;
+		additionalProperties?: boolean | Record<string, unknown>;
+		[key: string]: unknown;
 	};
 	/** Dot-separated tRPC procedure path, e.g. "project.create" */
 	procedurePath: string;
 	type: "query" | "mutation";
+}
+
+interface CallableProcedure {
+	_def?: {
+		type?: "query" | "mutation" | "subscription";
+		inputs?: z.ZodType[];
+	};
 }
 
 const EMPTY_INPUT_SCHEMA: McpToolDef["inputSchema"] = {
@@ -20,75 +28,44 @@ const EMPTY_INPUT_SCHEMA: McpToolDef["inputSchema"] = {
 	properties: {},
 };
 
-const buildToolsFromDocument = (): Map<string, McpToolDef> => {
-	const document = generateOpenApiDocument(appRouter, {
-		title: "Dokploy API",
-		version: "1.0.0",
-		baseUrl: "/api",
+const inputSchemaFor = (
+	procedure: CallableProcedure,
+): McpToolDef["inputSchema"] => {
+	const input = procedure._def?.inputs?.at(-1);
+	if (!input) return EMPTY_INPUT_SCHEMA;
+
+	const { $schema: _schemaVersion, ...schema } = z.toJSONSchema(input, {
+		// Zod transforms are still enforced by tRPC at execution time. Their JSON
+		// Schema representation can safely be unconstrained for tool discovery.
+		unrepresentable: "any",
 	});
+	if (schema.type !== "object") return EMPTY_INPUT_SCHEMA;
+	return schema as McpToolDef["inputSchema"];
+};
 
+const buildToolsFromRouter = (): Map<string, McpToolDef> => {
 	const tools = new Map<string, McpToolDef>();
+	const procedures = appRouter._def.procedures as Record<
+		string,
+		CallableProcedure
+	>;
 
-	for (const [path, methods] of Object.entries(document.paths ?? {})) {
-		// Paths are generated as "/<router>.<procedure>"
-		const procedurePath = path.replace(/^\//, "");
+	for (const [procedurePath, procedure] of Object.entries(procedures)) {
+		const type = procedure._def?.type;
+		// Streaming subscriptions are not callable MCP tools. Queries and
+		// mutations cover every request/response Dokploy operation.
+		if (type !== "query" && type !== "mutation") continue;
 
-		for (const [method, operation] of Object.entries(methods ?? {})) {
-			if (method !== "get" && method !== "post") continue;
-			const op = operation as {
-				operationId?: string;
-				description?: string;
-				parameters?: Array<{
-					name: string;
-					required?: boolean;
-					schema?: Record<string, unknown>;
-				}>;
-				requestBody?: {
-					content?: {
-						"application/json"?: { schema?: Record<string, unknown> };
-					};
-				};
-			};
+		const name = procedurePath.replace(/\./g, "-");
+		if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) continue;
 
-			const name = op.operationId ?? procedurePath.replace(/\./g, "-");
-			// MCP tool names must match [a-zA-Z0-9_-]
-			if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) continue;
-
-			let inputSchema: McpToolDef["inputSchema"] = EMPTY_INPUT_SCHEMA;
-
-			if (method === "get") {
-				const properties: Record<string, unknown> = {};
-				const required: string[] = [];
-				for (const param of op.parameters ?? []) {
-					properties[param.name] = param.schema ?? {};
-					if (param.required) required.push(param.name);
-				}
-				if (Object.keys(properties).length > 0) {
-					inputSchema = {
-						type: "object",
-						properties,
-						...(required.length > 0 ? { required } : {}),
-					};
-				}
-			} else {
-				const bodySchema = op.requestBody?.content?.["application/json"]
-					?.schema as McpToolDef["inputSchema"] | undefined;
-				if (bodySchema && bodySchema.type === "object") {
-					inputSchema = bodySchema;
-				}
-			}
-
-			const type = method === "get" ? "query" : "mutation";
-			tools.set(name, {
-				name,
-				description:
-					op.description ||
-					`Dokploy API ${type} "${procedurePath}". Calls the same operation as ${method.toUpperCase()} /api/${procedurePath} and returns its JSON result.`,
-				inputSchema,
-				procedurePath,
-				type,
-			});
-		}
+		tools.set(name, {
+			name,
+			description: `Dokploy API ${type} "${procedurePath}". Calls the same authorized tRPC operation and returns its JSON result.`,
+			inputSchema: inputSchemaFor(procedure),
+			procedurePath,
+			type,
+		});
 	}
 
 	return tools;
@@ -97,6 +74,6 @@ const buildToolsFromDocument = (): Map<string, McpToolDef> => {
 let registry: Map<string, McpToolDef> | null = null;
 
 export const getMcpTools = (): Map<string, McpToolDef> => {
-	registry ??= buildToolsFromDocument();
+	registry ??= buildToolsFromRouter();
 	return registry;
 };

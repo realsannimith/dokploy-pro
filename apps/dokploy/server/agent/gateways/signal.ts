@@ -82,6 +82,8 @@ export const startSignal = ({
 						text,
 						identifiers: [sender],
 						reply: (reply) => sendMessage(apiUrl, number, sender, reply),
+						sendProgress: (progress) =>
+							sendMessage(apiUrl, number, sender, progress),
 					});
 				}
 				await sleep(2_000);

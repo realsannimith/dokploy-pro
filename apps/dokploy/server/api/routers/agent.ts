@@ -4,14 +4,17 @@ import {
 	apiSaveAgent,
 	apiSaveAgentChannel,
 	apiSaveAgentMcpConfig,
+	apiSaveAgentMemory,
 	apiSaveAgentSkill,
 	apiSaveAgentToolConfig,
 } from "@dokploy/server/db/schema/agent";
 import {
 	deleteAgentChannel,
+	deleteAgentMemory,
 	deleteAgentSkill,
 	deleteConversation,
 	findAgentByOrganizationId,
+	findAgentMemories,
 	findAgentSkills,
 	findChannelById,
 	findChannelsByAgentId,
@@ -20,6 +23,7 @@ import {
 	findMessagesByConversationId,
 	saveAgent,
 	saveAgentChannel,
+	saveAgentMemory,
 	saveAgentSkill,
 	updateAgentSettings,
 } from "@dokploy/server/services/agent";
@@ -208,6 +212,28 @@ export const agentRouter = createTRPCRouter({
 		.mutation(async ({ ctx, input }) => {
 			const agent = await requireAgent(ctx.session.activeOrganizationId);
 			return await deleteAgentSkill(agent.agentId, input.skillId);
+		}),
+
+	memories: adminProcedure.query(async ({ ctx }) => {
+		const agent = await findAgentByOrganizationId(
+			ctx.session.activeOrganizationId,
+		);
+		if (!agent) return [];
+		return await findAgentMemories(agent.agentId);
+	}),
+
+	saveMemory: adminProcedure
+		.input(apiSaveAgentMemory)
+		.mutation(async ({ ctx, input }) => {
+			const agent = await requireAgent(ctx.session.activeOrganizationId);
+			return await saveAgentMemory(agent.agentId, input, "admin");
+		}),
+
+	deleteMemory: adminProcedure
+		.input(z.object({ key: z.string().min(1) }))
+		.mutation(async ({ ctx, input }) => {
+			const agent = await requireAgent(ctx.session.activeOrganizationId);
+			return await deleteAgentMemory(agent.agentId, input.key);
 		}),
 
 	channels: adminProcedure.query(async ({ ctx }) => {

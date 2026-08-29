@@ -1,14 +1,22 @@
 import { randomBytes } from "node:crypto";
-import type { AgentToolConfig } from "@dokploy/server/db/schema/agent";
+import type {
+	AgentMcpConfig,
+	AgentToolConfig,
+} from "@dokploy/server/db/schema/agent";
 import {
+	agentMemoryKeySchema,
 	agentSkillNameSchema,
+	apiSaveAgentMemory,
 	apiSaveAgentSkill,
 } from "@dokploy/server/db/schema/agent";
 import { generateAppName } from "@dokploy/server/db/schema/utils";
 import {
+	deleteAgentMemory,
+	findAgentMemories,
 	findAgentSkillByName,
 	findAgentSkills,
 	recordAgentSkillUse,
+	saveAgentMemory,
 	saveAgentSkill,
 } from "@dokploy/server/services/agent";
 import { type Tool, tool } from "ai";
@@ -75,6 +83,26 @@ export const AGENT_TOOL_META: AgentToolMeta[] = [
 		description: "Create or improve the agent's reusable procedural skills",
 		summarize: (input) =>
 			`${input.action === "create" ? "Learn" : "Improve"} skill /${input.name}`,
+	},
+	{
+		name: "listMemories",
+		group: "Read",
+		description: "List durable facts remembered across conversations",
+	},
+	{
+		name: "manageMemory",
+		group: "Create",
+		description: "Remember or forget one small durable fact",
+	},
+	{
+		name: "searchDokployTools",
+		group: "Read",
+		description: "Discover any Dokploy API operation allowed by policy",
+	},
+	{
+		name: "callDokployTool",
+		group: "Operate",
+		description: "Run a discovered Dokploy API operation",
 	},
 	{
 		name: "deployService",
@@ -207,6 +235,7 @@ export interface AgentConfirmationHandler {
 export interface BuildAgentToolsOptions {
 	agentId: string;
 	toolConfig?: AgentToolConfig | null;
+	mcpConfig?: AgentMcpConfig | null;
 	/**
 	 * When set, tools whose resolved setting requires confirmation do not
 	 * execute; they hand the call to this handler (which stores it and shows
@@ -361,6 +390,17 @@ export const buildAgentTools = (
 	caller: AgentCaller,
 	options: BuildAgentToolsOptions,
 ) => {
+	const callProcedure = async (procedurePath: string, input: unknown) => {
+		let procedure: unknown = caller;
+		for (const segment of procedurePath.split(".")) {
+			procedure = (procedure as Record<string, unknown>)?.[segment];
+		}
+		if (typeof procedure !== "function") {
+			throw new Error(`Unknown Dokploy procedure: ${procedurePath}`);
+		}
+		return await (procedure as (args: unknown) => Promise<unknown>)(input);
+	};
+
 	const getService = async (serviceType: ServiceType, serviceId: string) => {
 		switch (serviceType) {
 			case "application":
@@ -383,6 +423,150 @@ export const buildAgentTools = (
 	};
 
 	const allTools = {
+		searchDokployTools: tool({
+			description:
+				"Search the complete Dokploy API tool catalog. Use this when the focused built-in tools do not cover an operation. Search first, inspect the returned JSON schema, then call callDokployTool with the exact name and arguments. Results respect the administrator's MCP access policy.",
+			inputSchema: z.object({
+				query: z.string().trim().default(""),
+				router: z.string().trim().optional(),
+				type: z.enum(["query", "mutation", "any"]).default("any"),
+				limit: z.number().int().min(1).max(20).default(10),
+			}),
+			execute: async ({ query, router, type, limit }) => {
+				try {
+					const [{ isMcpToolAllowed, resolveMcpPolicy }, { getMcpTools }] =
+						await Promise.all([
+							import("@/server/mcp/policy"),
+							import("@/server/mcp/registry"),
+						]);
+					const policy = resolveMcpPolicy(options.mcpConfig);
+					const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+					const matches = [...getMcpTools().values()]
+						.filter((definition) => isMcpToolAllowed(definition, policy))
+						.filter(
+							(definition) =>
+								!router || definition.procedurePath.startsWith(`${router}.`),
+						)
+						.filter((definition) => type === "any" || definition.type === type)
+						.filter((definition) => {
+							const haystack =
+								`${definition.name} ${definition.procedurePath} ${definition.description}`.toLowerCase();
+							return terms.every((term) => haystack.includes(term));
+						})
+						.slice(0, limit)
+						.map((definition) => ({
+							name: definition.name,
+							procedure: definition.procedurePath,
+							type: definition.type,
+							description: definition.description,
+							inputSchema: definition.inputSchema,
+						}));
+					return toResult(matches);
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		callDokployTool: tool({
+			description:
+				"Run one exact Dokploy API tool returned by searchDokployTools. Arguments must match its returned inputSchema. Gateway mutation calls always require user approval before execution. Never guess a tool name or input fields.",
+			inputSchema: z.object({
+				name: z.string().min(1).max(64),
+				arguments: z.record(z.string(), z.unknown()).default({}),
+			}),
+			execute: async ({ name, arguments: args }) => {
+				try {
+					const [{ isMcpToolAllowed, resolveMcpPolicy }, { getMcpTools }] =
+						await Promise.all([
+							import("@/server/mcp/policy"),
+							import("@/server/mcp/registry"),
+						]);
+					const definition = getMcpTools().get(name);
+					if (!definition) return toResult(`Unknown Dokploy tool: ${name}`);
+					const policy = resolveMcpPolicy(options.mcpConfig);
+					if (!isMcpToolAllowed(definition, policy)) {
+						return toResult(
+							`The tool ${name} is blocked by the administrator's MCP access policy.`,
+						);
+					}
+					if (definition.procedurePath === "agent.chat") {
+						return toResult("Refused recursive agent.chat invocation.");
+					}
+					if (definition.type === "mutation" && options.confirmation) {
+						const shownArgs = JSON.stringify(args);
+						return await options.confirmation.request({
+							toolName: "callDokployTool",
+							summary: `Run Dokploy action ${definition.procedurePath} with ${
+								shownArgs.length > 600
+									? `${shownArgs.slice(0, 600)}…`
+									: shownArgs
+							}`,
+							toolInput: { name, arguments: args },
+						});
+					}
+					return toResult(await callProcedure(definition.procedurePath, args));
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		listMemories: tool({
+			description:
+				"List small durable facts remembered across this agent's conversations.",
+			inputSchema: z.object({}),
+			execute: async () => {
+				try {
+					const memories = await findAgentMemories(options.agentId);
+					return toResult(
+						memories.map(({ key, content, origin, updatedAt }) => ({
+							key,
+							content,
+							origin,
+							updatedAt,
+						})),
+					);
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		manageMemory: tool({
+			description:
+				"Remember or forget one small durable fact that should stay available across sessions, such as a naming preference or stable environment convention. Never store passwords, tokens, private keys, API keys, transient statuses, or long procedures (use manageSkill for procedures).",
+			inputSchema: z.discriminatedUnion("action", [
+				apiSaveAgentMemory.extend({ action: z.literal("remember") }),
+				z.object({ action: z.literal("forget"), key: agentMemoryKeySchema }),
+			]),
+			execute: async (input) => {
+				try {
+					if (input.action === "forget") {
+						const deleted = await deleteAgentMemory(options.agentId, input.key);
+						return toResult(
+							deleted
+								? `Forgot memory ${input.key}.`
+								: `Memory ${input.key} was not found.`,
+						);
+					}
+					if (
+						/(?:password|secret|api[-_ ]?key|access[-_ ]?token|private[-_ ]?key)\s*[:=]/i.test(
+							input.content,
+						)
+					) {
+						return toResult(
+							"Refused to store content that looks like a secret.",
+						);
+					}
+					const saved = await saveAgentMemory(
+						options.agentId,
+						{ key: input.key, content: input.content },
+						"agent",
+					);
+					return toResult(`Remembered ${saved?.key}.`);
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
 		listSkills: tool({
 			description:
 				"List the names, descriptions and versions of reusable skills learned by this Dokploy agent. Full instructions are intentionally omitted; use readSkill only for a relevant skill.",

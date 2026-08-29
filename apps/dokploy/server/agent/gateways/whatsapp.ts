@@ -97,6 +97,8 @@ export const handleWhatsappWebhook = async (body: any) => {
 					identifiers: [from],
 					reply: (reply) =>
 						sendMessage(accessToken, String(phoneNumberId), from, reply),
+					sendProgress: (progress) =>
+						sendMessage(accessToken, String(phoneNumberId), from, progress),
 				});
 			}
 		}

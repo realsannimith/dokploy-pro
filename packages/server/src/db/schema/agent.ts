@@ -134,8 +134,11 @@ export const agentConversation = pgTable("agent_conversation", {
 		.notNull()
 		.references(() => agent.agentId, { onDelete: "cascade" }),
 	source: agentConversationSource("source").notNull(),
-	// Telegram chat id (one conversation per chat) — null for web chats.
+	// Active gateway binding — null after /new and for web chats.
 	externalChatId: text("externalChatId"),
+	// Stable owner chat/thread/sender used to keep archived gateway sessions
+	// private after their active binding is detached.
+	gatewaySessionKey: text("gatewaySessionKey"),
 	title: text("title"),
 	createdAt: text("createdAt")
 		.notNull()
@@ -236,6 +239,35 @@ export const agentSkill = pgTable(
 	],
 );
 
+/** Small durable facts that should remain available across conversations. */
+export const agentMemory = pgTable(
+	"agent_memory",
+	{
+		memoryId: text("memoryId")
+			.notNull()
+			.primaryKey()
+			.$defaultFn(() => nanoid()),
+		agentId: text("agentId")
+			.notNull()
+			.references(() => agent.agentId, { onDelete: "cascade" }),
+		key: text("key").notNull(),
+		content: text("content").notNull(),
+		origin: text("origin")
+			.$type<"agent" | "admin">()
+			.notNull()
+			.default("agent"),
+		createdAt: text("createdAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+		updatedAt: text("updatedAt")
+			.notNull()
+			.$defaultFn(() => new Date().toISOString()),
+	},
+	(table) => [
+		uniqueIndex("agent_memory_agentId_key_index").on(table.agentId, table.key),
+	],
+);
+
 export const agentRelations = relations(agent, ({ one, many }) => ({
 	organization: one(organization, {
 		fields: [agent.organizationId],
@@ -252,6 +284,14 @@ export const agentRelations = relations(agent, ({ one, many }) => ({
 	conversations: many(agentConversation),
 	channels: many(agentChannel),
 	skills: many(agentSkill),
+	memories: many(agentMemory),
+}));
+
+export const agentMemoryRelations = relations(agentMemory, ({ one }) => ({
+	agent: one(agent, {
+		fields: [agentMemory.agentId],
+		references: [agent.agentId],
+	}),
 }));
 
 export const agentSkillRelations = relations(agentSkill, ({ one }) => ({
@@ -372,4 +412,18 @@ export const apiSaveAgentSkill = z.object({
 	name: agentSkillNameSchema,
 	description: z.string().trim().min(1).max(240),
 	content: z.string().trim().min(1).max(20_000),
+});
+
+export const agentMemoryKeySchema = z
+	.string()
+	.min(1)
+	.max(64)
+	.regex(
+		/^[a-z0-9]+(?:-[a-z0-9]+)*$/,
+		"Use lowercase letters, numbers, and single hyphens",
+	);
+
+export const apiSaveAgentMemory = z.object({
+	key: agentMemoryKeySchema,
+	content: z.string().trim().min(1).max(1_000),
 });

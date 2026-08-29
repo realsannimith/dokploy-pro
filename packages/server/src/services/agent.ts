@@ -3,6 +3,7 @@ import {
 	agent,
 	agentChannel,
 	agentConversation,
+	agentMemory,
 	agentMessage,
 	agentPendingAction,
 	agentSkill,
@@ -12,10 +13,11 @@ import type {
 	AgentToolConfig,
 	apiSaveAgent,
 	apiSaveAgentChannel,
+	apiSaveAgentMemory,
 	apiSaveAgentSkill,
 } from "@dokploy/server/db/schema/agent";
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import type { z } from "zod";
 
 export const findAgentByOrganizationId = async (organizationId: string) => {
@@ -230,6 +232,7 @@ export const findOrCreateConversation = async (input: {
 			agentId: input.agentId,
 			source: input.source,
 			externalChatId: input.externalChatId,
+			gatewaySessionKey: input.externalChatId,
 			title: input.title,
 		})
 		.returning();
@@ -278,6 +281,99 @@ export const findMessagesByConversationId = async (
 		return messages.slice(messages.length - limit);
 	}
 	return messages;
+};
+
+export const findConversationByExternalChat = async (
+	agentId: string,
+	source: AgentSource,
+	externalChatId: string,
+) => {
+	return await db.query.agentConversation.findFirst({
+		where: and(
+			eq(agentConversation.agentId, agentId),
+			eq(agentConversation.source, source),
+			eq(agentConversation.externalChatId, externalChatId),
+		),
+	});
+};
+
+export const findConversationsForSource = async (
+	agentId: string,
+	source: AgentSource,
+	gatewaySessionKey: string,
+) => {
+	return await db.query.agentConversation.findMany({
+		where: and(
+			eq(agentConversation.agentId, agentId),
+			eq(agentConversation.source, source),
+			eq(agentConversation.gatewaySessionKey, gatewaySessionKey),
+		),
+		orderBy: desc(agentConversation.updatedAt),
+	});
+};
+
+export const attachConversationToExternalChat = async (input: {
+	agentId: string;
+	source: AgentSource;
+	externalChatId: string;
+	conversationId: string;
+}) => {
+	const conversation = await findConversationById(input.conversationId);
+	if (
+		conversation.agentId !== input.agentId ||
+		conversation.source !== input.source ||
+		conversation.gatewaySessionKey !== input.externalChatId
+	) {
+		throw new TRPCError({
+			code: "FORBIDDEN",
+			message: "Conversation does not belong to this gateway chat",
+		});
+	}
+	await detachConversation(input.agentId, input.source, input.externalChatId);
+	const updated = await db
+		.update(agentConversation)
+		.set({
+			externalChatId: input.externalChatId,
+			updatedAt: new Date().toISOString(),
+		})
+		.where(eq(agentConversation.conversationId, input.conversationId))
+		.returning();
+	return updated[0];
+};
+
+export const renameConversation = async (
+	conversationId: string,
+	title: string,
+) => {
+	const updated = await db
+		.update(agentConversation)
+		.set({ title: title.slice(0, 120), updatedAt: new Date().toISOString() })
+		.where(eq(agentConversation.conversationId, conversationId))
+		.returning();
+	return updated[0];
+};
+
+/** Remove the latest stored user/assistant exchange and return its user text. */
+export const undoLastConversationExchange = async (conversationId: string) => {
+	const messages = await db.query.agentMessage.findMany({
+		where: eq(agentMessage.conversationId, conversationId),
+		orderBy: desc(agentMessage.createdAt),
+		limit: 4,
+	});
+	const userIndex = messages.findIndex((message) => message.role === "user");
+	if (userIndex === -1) return null;
+	const removed = messages.slice(0, userIndex + 1);
+	await db.delete(agentMessage).where(
+		inArray(
+			agentMessage.messageId,
+			removed.map((item) => item.messageId),
+		),
+	);
+	await db
+		.update(agentConversation)
+		.set({ updatedAt: new Date().toISOString() })
+		.where(eq(agentConversation.conversationId, conversationId));
+	return messages[userIndex]?.content ?? null;
 };
 
 export const createAgentMessage = async (input: {
@@ -344,6 +440,22 @@ export const findPendingActionById = async (actionId: string) => {
 		});
 	}
 	return action;
+};
+
+export const findLatestPendingActionForChat = async (
+	agentId: string,
+	channelId: string,
+	externalChatId: string,
+) => {
+	return await db.query.agentPendingAction.findFirst({
+		where: and(
+			eq(agentPendingAction.agentId, agentId),
+			eq(agentPendingAction.channelId, channelId),
+			eq(agentPendingAction.externalChatId, externalChatId),
+			eq(agentPendingAction.status, "pending"),
+		),
+		orderBy: desc(agentPendingAction.createdAt),
+	});
 };
 
 export const isPendingActionExpired = (action: {
@@ -417,6 +529,38 @@ export const deleteAgentSkill = async (agentId: string, skillId: string) => {
 		.where(
 			and(eq(agentSkill.agentId, agentId), eq(agentSkill.skillId, skillId)),
 		)
+		.returning();
+	return removed.length > 0;
+};
+
+export const findAgentMemories = async (agentId: string) => {
+	return await db.query.agentMemory.findMany({
+		where: eq(agentMemory.agentId, agentId),
+		orderBy: asc(agentMemory.key),
+	});
+};
+
+export const saveAgentMemory = async (
+	agentId: string,
+	input: z.infer<typeof apiSaveAgentMemory>,
+	origin: "agent" | "admin" = "agent",
+) => {
+	const now = new Date().toISOString();
+	const saved = await db
+		.insert(agentMemory)
+		.values({ ...input, agentId, origin, updatedAt: now })
+		.onConflictDoUpdate({
+			target: [agentMemory.agentId, agentMemory.key],
+			set: { content: input.content, origin, updatedAt: now },
+		})
+		.returning();
+	return saved[0];
+};
+
+export const deleteAgentMemory = async (agentId: string, key: string) => {
+	const removed = await db
+		.delete(agentMemory)
+		.where(and(eq(agentMemory.agentId, agentId), eq(agentMemory.key, key)))
 		.returning();
 	return removed.length > 0;
 };

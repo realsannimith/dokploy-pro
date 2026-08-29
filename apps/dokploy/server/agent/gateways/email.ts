@@ -114,6 +114,7 @@ export const startEmail = ({
 							text,
 							identifiers: [sender],
 							reply: (reply) => sendReply(sender, subject, reply),
+							sendProgress: (progress) => sendReply(sender, subject, progress),
 							// Never auto-reply to unknown senders: an inbox receives
 							// spam, and bouncing a notice back to a forged address
 							// would make this a backscatter source.

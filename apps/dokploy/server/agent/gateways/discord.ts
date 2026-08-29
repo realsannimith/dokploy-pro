@@ -102,6 +102,8 @@ export const startDiscord = ({
 					text,
 					identifiers: [message.author?.id, message.author?.username],
 					reply: (reply) => sendMessage(token, message.channel_id, reply),
+					sendProgress: (progress) =>
+						sendMessage(token, message.channel_id, progress),
 				});
 			}
 		});

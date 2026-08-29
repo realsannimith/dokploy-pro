@@ -198,8 +198,17 @@ export const startTelegram = ({
 		void telegramApi(token, "setMyCommands", {
 			commands: [
 				{ command: "new", description: "Start a fresh conversation" },
+				{ command: "status", description: "Show the active session" },
+				{ command: "whoami", description: "Show your gateway identity" },
+				{ command: "sessions", description: "List previous sessions" },
+				{ command: "resume", description: "Resume a session by id or title" },
+				{ command: "title", description: "Rename the active session" },
+				{ command: "undo", description: "Remove the last exchange" },
+				{ command: "retry", description: "Retry the last request" },
 				{ command: "skills", description: "List reusable agent skills" },
 				{ command: "learn", description: "Teach the agent a workflow" },
+				{ command: "approve", description: "Approve a pending action" },
+				{ command: "deny", description: "Reject a pending action" },
 				{ command: "help", description: "Show what the agent can do" },
 			],
 		}).catch(() => {});

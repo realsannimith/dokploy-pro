@@ -65,6 +65,7 @@ export const resolvePendingAction = async (
 	const tools = buildAgentTools(caller, {
 		agentId: agent.agentId,
 		toolConfig: agent.toolConfig,
+		mcpConfig: agent.mcpConfig,
 	});
 	const toolDef = tools[action.toolName];
 

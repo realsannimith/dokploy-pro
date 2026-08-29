@@ -97,6 +97,8 @@ export const startSlack = ({
 					text,
 					identifiers: [event.user],
 					reply: (reply) => sendMessage(botToken, event.channel, reply),
+					sendProgress: (progress) =>
+						sendMessage(botToken, event.channel, progress),
 				});
 			});
 

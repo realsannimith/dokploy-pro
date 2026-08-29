@@ -6,6 +6,7 @@ import superjson from "superjson";
 import { AgentChannels } from "@/components/dashboard/settings/agent/agent-channels";
 import { AgentChat } from "@/components/dashboard/settings/agent/agent-chat";
 import { AgentForm } from "@/components/dashboard/settings/agent/agent-form";
+import { AgentMemory } from "@/components/dashboard/settings/agent/agent-memory";
 import {
 	AgentMcp,
 	AgentTools,
@@ -20,6 +21,7 @@ const Page = () => {
 			<AgentForm />
 			<AgentChannels />
 			<AgentSkills />
+			<AgentMemory />
 			<AgentTools />
 			<AgentMcp />
 			<AgentChat />

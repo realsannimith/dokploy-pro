@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseGatewayCommand } from "@/server/agent/gateways/dispatch";
 import {
 	formatSkillIndex,
 	resolveSkillInvocation,
@@ -45,5 +46,19 @@ describe("agent skills", () => {
 
 	it("does not consume unknown slash commands", () => {
 		expect(resolveSkillInvocation("/help", [skill("deploy-api")])).toBeNull();
+	});
+
+	it("normalizes commands shared by every gateway", () => {
+		expect(parseGatewayCommand("/new@dokploy_bot")).toMatchObject({
+			command: "/new",
+			args: "",
+		});
+		expect(
+			parseGatewayCommand("<@U123BOT> /resume production api"),
+		).toMatchObject({
+			command: "/resume",
+			args: "production api",
+		});
+		expect(parseGatewayCommand("deploy the api").command).toBeUndefined();
 	});
 });
