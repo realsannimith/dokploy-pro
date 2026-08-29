@@ -229,6 +229,9 @@ const summarizeToolCall = (name: string, input: unknown) => {
 	return `${name} ${raw.length > 200 ? `${raw.slice(0, 200)}…` : raw}`;
 };
 
+const CONFIRMATION_TOOL_NOTE =
+	" Calling this does not run it: it sends the user an Approve/Reject prompt in the chat, which is the confirmation step. Call it as soon as the user asks for the action — never ask them to confirm in a chat message first, and never call it again while its prompt is unanswered.";
+
 export interface AgentConfirmationHandler {
 	request: (request: {
 		toolName: string;
@@ -247,6 +250,12 @@ export interface BuildAgentToolsOptions {
 	 * Approve/Reject buttons) and return its marker text to the model.
 	 */
 	confirmation?: AgentConfirmationHandler;
+	/**
+	 * Set only when replaying a tool call the user already approved. The
+	 * approval gate has been satisfied, so tools must execute for real
+	 * instead of asking for confirmation again (or refusing it).
+	 */
+	skipConfirmation?: boolean;
 }
 
 const serviceTypeSchema = z.enum([
@@ -498,7 +507,7 @@ export const buildAgentTools = (
 		}),
 		callDokployTool: tool({
 			description:
-				"Run one exact Dokploy API tool returned by searchDokployTools. Arguments must match its returned inputSchema. Gateway mutation calls always require user approval before execution. Never guess a tool name or input fields.",
+				"Run one exact Dokploy API tool returned by searchDokployTools. Arguments must match its returned inputSchema. Mutations are approval-gated: calling one sends the user an Approve/Reject prompt instead of running it, so never ask the user to confirm in a chat message first. Never guess a tool name or input fields.",
 			inputSchema: z.object({
 				name: z.string().min(1).max(64),
 				arguments: z.record(z.string(), z.unknown()).default({}),
@@ -523,7 +532,7 @@ export const buildAgentTools = (
 							"Refused: the agent cannot call or reconfigure itself through the tool catalog.",
 						);
 					}
-					if (definition.type === "mutation") {
+					if (definition.type === "mutation" && !options.skipConfirmation) {
 						if (!options.confirmation) {
 							return toResult(
 								`${definition.procedurePath} is a mutation and requires user approval, which this chat surface cannot collect. Use a focused built-in tool instead, or ask the user to run it from the dashboard or a connected channel.`,
@@ -1431,7 +1440,7 @@ export const buildAgentTools = (
 		}),
 		deleteService: tool({
 			description:
-				"Permanently delete a service and its container. DESTRUCTIVE and irreversible — only call this after the user explicitly confirmed the deletion in this conversation. confirmName must exactly match the service's current name (check with getService).",
+				"Permanently delete a service and its container. DESTRUCTIVE and irreversible. confirmName must exactly match the service's current name (check with getService).",
 			inputSchema: z.object({
 				serviceType: serviceTypeSchema,
 				serviceId: z.string(),
@@ -1493,7 +1502,7 @@ export const buildAgentTools = (
 		}),
 		deleteEnvironment: tool({
 			description:
-				"Permanently delete an environment and EVERY service inside it. DESTRUCTIVE and irreversible — only call this after the user explicitly confirmed. confirmName must exactly match the environment's name.",
+				"Permanently delete an environment and EVERY service inside it. DESTRUCTIVE and irreversible. confirmName must exactly match the environment's name.",
 			inputSchema: z.object({
 				environmentId: z.string(),
 				confirmName: z
@@ -1519,7 +1528,7 @@ export const buildAgentTools = (
 		}),
 		deleteProject: tool({
 			description:
-				"Permanently delete a whole project with ALL its environments and services. DESTRUCTIVE and irreversible — only call this after the user explicitly confirmed. confirmName must exactly match the project's name.",
+				"Permanently delete a whole project with ALL its environments and services. DESTRUCTIVE and irreversible. confirmName must exactly match the project's name.",
 			inputSchema: z.object({
 				projectId: z.string(),
 				confirmName: z
@@ -1550,9 +1559,12 @@ export const buildAgentTools = (
 		const setting = resolveToolSetting(name, options.toolConfig);
 		if (!setting.enabled) continue;
 		const confirmation = options.confirmation;
-		if (setting.confirm && confirmation) {
+		if (setting.confirm && options.skipConfirmation) {
+			tools[name] = toolDef;
+		} else if (setting.confirm && confirmation) {
 			tools[name] = {
 				...toolDef,
+				description: `${toolDef.description ?? ""}${CONFIRMATION_TOOL_NOTE}`,
 				execute: async (input: unknown) =>
 					await confirmation.request({
 						toolName: name,

@@ -1,5 +1,9 @@
 import type { OverviewService } from "@dokploy/server/services/overview";
-import { sortOverviewServices } from "@dokploy/server/services/overview";
+import {
+	DEPLOYABLE_SERVICE_TYPES,
+	getOverviewStatusLabel,
+	sortOverviewServices,
+} from "@dokploy/server/services/overview";
 import { describe, expect, test } from "vitest";
 
 const makeService = (overrides: Partial<OverviewService>): OverviewService => ({
@@ -92,6 +96,41 @@ describe("sortOverviewServices", () => {
 		).toEqual(["a", "b"]);
 	});
 
+	test("falls back to newest-first when nothing has a deploy date", () => {
+		const services = [
+			makeService({
+				id: "old",
+				type: "postgres",
+				createdAt: "2024-01-01T00:00:00.000Z",
+			}),
+			makeService({
+				id: "new",
+				type: "postgres",
+				createdAt: "2024-06-01T00:00:00.000Z",
+			}),
+			makeService({
+				id: "mid",
+				type: "redis",
+				createdAt: "2024-03-01T00:00:00.000Z",
+			}),
+		];
+
+		expect(
+			sortOverviewServices(services, "lastDeploy-desc").map((s) => s.id),
+		).toEqual(["new", "mid", "old"]);
+	});
+
+	test("keeps deployed services ahead of the createdAt fallback group", () => {
+		const services = [
+			makeService({ id: "db-new", createdAt: "2025-01-01T00:00:00.000Z" }),
+			makeService({ id: "app", lastDeployAt: "2020-01-01T00:00:00.000Z" }),
+		];
+
+		expect(
+			sortOverviewServices(services, "lastDeploy-desc").map((s) => s.id),
+		).toEqual(["app", "db-new"]);
+	});
+
 	test("does not mutate the input array", () => {
 		const services = [
 			makeService({ id: "b", name: "Bravo" }),
@@ -102,5 +141,31 @@ describe("sortOverviewServices", () => {
 		sortOverviewServices(services, "name-asc");
 
 		expect(services).toEqual(original);
+	});
+});
+
+describe("overview service metadata", () => {
+	test("only application and compose own deployment history", () => {
+		expect(DEPLOYABLE_SERVICE_TYPES.has("application")).toBe(true);
+		expect(DEPLOYABLE_SERVICE_TYPES.has("compose")).toBe(true);
+		for (const type of [
+			"postgres",
+			"mysql",
+			"mariadb",
+			"mongo",
+			"redis",
+			"libsql",
+		] as const) {
+			expect(DEPLOYABLE_SERVICE_TYPES.has(type)).toBe(false);
+		}
+	});
+
+	test("labels the steady state as Running and the mid-deploy state as Deploying", () => {
+		expect(getOverviewStatusLabel("done")).toBe("Running");
+		expect(getOverviewStatusLabel("running")).toBe("Deploying");
+		expect(getOverviewStatusLabel("idle")).toBe("Idle");
+		expect(getOverviewStatusLabel("error")).toBe("Error");
+		expect(getOverviewStatusLabel(null)).toBe("Unknown");
+		expect(getOverviewStatusLabel("something-else")).toBe("Unknown");
 	});
 });

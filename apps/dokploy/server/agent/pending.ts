@@ -5,8 +5,22 @@ import {
 	isPendingActionExpired,
 	updatePendingActionStatus,
 } from "@dokploy/server/services/agent";
+import type { Tool } from "ai";
 import { createAgentCaller } from "./caller";
 import { buildAgentTools } from "./tools";
+
+/**
+ * The stored input is raw JSON, so schema defaults that the model left out
+ * are missing. Re-parse it the way the AI SDK would before executing.
+ */
+const parseStoredToolInput = (toolDef: Tool, input: unknown) => {
+	const schema = (toolDef as { inputSchema?: unknown }).inputSchema as
+		| { safeParse?: (value: unknown) => { success: boolean; data?: unknown } }
+		| undefined;
+	if (typeof schema?.safeParse !== "function") return input;
+	const parsed = schema.safeParse(input ?? {});
+	return parsed.success ? parsed.data : input;
+};
 
 export interface ResolvedActionResult {
 	status: "approved" | "rejected" | "expired" | "already-handled";
@@ -61,11 +75,14 @@ export const resolvePendingAction = async (
 	await updatePendingActionStatus(actionId, "approved");
 	const agent = await findAgentById(action.agentId);
 	const caller = await createAgentCaller(agent.userId, agent.organizationId);
-	// No confirmation handler here: the approved tool must actually execute.
+	// The user already approved this exact call, so the tools are built
+	// unguarded — otherwise the approval gate would fire a second time and the
+	// action would never run.
 	const tools = buildAgentTools(caller, {
 		agentId: agent.agentId,
 		toolConfig: agent.toolConfig,
 		mcpConfig: agent.mcpConfig,
+		skipConfirmation: true,
 	});
 	const toolDef = tools[action.toolName];
 
@@ -74,10 +91,13 @@ export const resolvePendingAction = async (
 		output = `The tool "${action.toolName}" is disabled or no longer available.`;
 	} else {
 		try {
-			const result = await toolDef.execute(action.toolInput, {
-				toolCallId: actionId,
-				messages: [],
-			});
+			const result = await toolDef.execute(
+				parseStoredToolInput(toolDef, action.toolInput),
+				{
+					toolCallId: actionId,
+					messages: [],
+				},
+			);
 			output = typeof result === "string" ? result : JSON.stringify(result);
 		} catch (error) {
 			output = `Error: ${error instanceof Error ? error.message : String(error)}`;

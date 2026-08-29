@@ -56,15 +56,46 @@ export const sortOverviewServices = (
 				new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
 			return direction === "asc" ? cmp : -cmp;
 		}
-		// lastDeploy: services without a deploy always sort to the end.
+		// lastDeploy: services without a deploy always sort to the end. Databases
+		// never have deployment records, so an org made only of databases would
+		// otherwise come back in arbitrary order — tie-break on creation date.
 		const aDate = a.lastDeployAt ? new Date(a.lastDeployAt).getTime() : null;
 		const bDate = b.lastDeployAt ? new Date(b.lastDeployAt).getTime() : null;
-		if (aDate === null && bDate === null) return 0;
+		if (aDate === null && bDate === null) {
+			const cmp =
+				new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+			return cmp !== 0 ? cmp : a.name.localeCompare(b.name);
+		}
 		if (aDate === null) return 1;
 		if (bDate === null) return -1;
 		return direction === "desc" ? bDate - aDate : aDate - bDate;
 	});
 };
+
+/**
+ * Service types that own no rows in the deployments table, so "last deploy" is
+ * not applicable to them rather than merely unknown.
+ */
+export const DEPLOYABLE_SERVICE_TYPES = new Set<OverviewServiceType>([
+	"application",
+	"compose",
+]);
+
+/**
+ * "done" is the steady live state and "running" only holds mid-deploy, so the
+ * raw column values read backwards to users. One map keeps the status column,
+ * its tooltip and the status filter telling the same story.
+ */
+export const OVERVIEW_STATUS_LABELS: Record<string, string> = {
+	idle: "Idle",
+	running: "Deploying",
+	done: "Running",
+	error: "Error",
+	cancelled: "Cancelled",
+};
+
+export const getOverviewStatusLabel = (status: string | null | undefined) =>
+	(status && OVERVIEW_STATUS_LABELS[status]) || "Unknown";
 
 export const DB_ENGINE_ICON_TYPES = new Set([
 	"postgres",

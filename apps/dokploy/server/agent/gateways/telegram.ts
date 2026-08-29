@@ -168,12 +168,24 @@ const handleActionCallback = async (
 		const actor = callback.from?.username
 			? `@${callback.from.username}`
 			: String(callback.from?.id ?? "user");
+		// Telegram expires a callback query after a few seconds, and the
+		// approved action can take much longer than that, so acknowledge the
+		// tap and swap the buttons for a progress line before running it.
+		await answer();
+		if (callback.message) {
+			await telegramApi(token, "editMessageText", {
+				chat_id: callback.message.chat.id,
+				message_id: callback.message.message_id,
+				text: `${verdict === "y" ? "✅ Approved" : "❌ Rejected"} by ${actor}\n\n${action.summary}${
+					verdict === "y" ? "\n\n⏳ Running…" : ""
+				}`,
+			}).catch(() => {});
+		}
 		const resolved = await resolvePendingAction(
 			actionId,
 			verdict === "y",
 			actor,
 		);
-		await answer();
 
 		if (callback.message) {
 			const icon =

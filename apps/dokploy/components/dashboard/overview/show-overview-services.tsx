@@ -2,16 +2,23 @@ import type {
 	OverviewServiceType,
 	OverviewSortBy,
 } from "@dokploy/server/services/overview-shared";
-import { sortOverviewServices } from "@dokploy/server/services/overview-shared";
+import {
+	DEPLOYABLE_SERVICE_TYPES,
+	getOverviewStatusLabel,
+	sortOverviewServices,
+} from "@dokploy/server/services/overview-shared";
 import {
 	Ban,
 	CircuitBoard,
+	ExternalLink,
 	GlobeIcon,
 	Loader2,
 	MoreHorizontal,
 	RefreshCw,
+	RotateCw,
 	Search,
 	ServerIcon,
+	X,
 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -19,7 +26,6 @@ import { toast } from "sonner";
 import { DB_ENGINE_ICONS } from "@/components/icons/data-tools-icons";
 import { DateTooltip } from "@/components/shared/date-tooltip";
 import { DialogAction } from "@/components/shared/dialog-action";
-import { StatusTooltip } from "@/components/shared/status-tooltip";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -45,7 +51,14 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useSortPreference } from "@/hooks/use-sort-preference";
+import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100, 200];
@@ -63,12 +76,12 @@ const TYPE_LABELS = {
 
 const STATUS_OPTIONS = ["running", "idle", "done", "error"];
 
-// "done" is the steady live state (green); "running" only holds mid-deploy (yellow) — relabeled to match what users expect.
-const STATUS_LABELS: Record<string, string> = {
-	running: "Deploying",
-	idle: "Idle",
-	done: "Running",
-	error: "Error",
+const STATUS_DOT_CLASSES: Record<string, string> = {
+	done: "bg-green-500",
+	running: "bg-yellow-500",
+	error: "bg-destructive",
+	idle: "bg-muted-foreground dark:bg-card",
+	cancelled: "bg-muted-foreground",
 };
 
 const SORT_OPTIONS: { value: OverviewSortBy; label: string }[] = [
@@ -100,6 +113,7 @@ export const ShowOverviewServices = () => {
 	const {
 		data: services,
 		isLoading,
+		isRefetching,
 		refetch,
 	} = api.overview.services.useQuery();
 	const { data: allProjects } = api.project.all.useQuery();
@@ -214,9 +228,17 @@ export const ShowOverviewServices = () => {
 
 	const filteredServices = useMemo(() => {
 		if (!services) return [];
+		const query = searchQuery.trim().toLowerCase();
 		const filtered = services.filter(
 			(service) =>
-				service.name.toLowerCase().includes(searchQuery.toLowerCase()) &&
+				(query === "" ||
+					[
+						service.name,
+						service.appName,
+						service.projectName,
+						service.environmentName,
+						service.serverName ?? "Dokploy server",
+					].some((field) => field?.toLowerCase().includes(query))) &&
 				(selectedProjectId === "all" ||
 					service.projectId === selectedProjectId) &&
 				(selectedType === "all" || service.type === selectedType) &&
@@ -245,6 +267,21 @@ export const ShowOverviewServices = () => {
 		currentPageIndex * pageSize,
 		currentPageIndex * pageSize + pageSize,
 	);
+
+	const hasActiveFilters =
+		searchQuery !== "" ||
+		selectedProjectId !== "all" ||
+		selectedType !== "all" ||
+		selectedStatus !== "all" ||
+		selectedServerId !== "all";
+
+	const clearFilters = () => {
+		setSearchQuery("");
+		setSelectedProjectId("all");
+		setSelectedType("all");
+		setSelectedStatus("all");
+		setSelectedServerId("all");
+	};
 
 	const renderIcon = (service: NonNullable<typeof services>[number]) => {
 		if (service.type in DB_ENGINE_ICONS) {
@@ -286,7 +323,18 @@ export const ShowOverviewServices = () => {
 								onChange={(e) => setSearchQuery(e.target.value)}
 								className="pr-9 w-[200px]"
 							/>
-							<Search className="absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+							{searchQuery ? (
+								<button
+									type="button"
+									aria-label="Clear search"
+									onClick={() => setSearchQuery("")}
+									className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground hover:text-foreground"
+								>
+									<X className="size-3.5" />
+								</button>
+							) : (
+								<Search className="absolute right-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+							)}
 						</div>
 						<Select
 							value={selectedProjectId}
@@ -325,7 +373,7 @@ export const ShowOverviewServices = () => {
 								<SelectItem value="all">All statuses</SelectItem>
 								{STATUS_OPTIONS.map((status) => (
 									<SelectItem key={status} value={status}>
-										{STATUS_LABELS[status] ?? status}
+										{getOverviewStatusLabel(status)}
 									</SelectItem>
 								))}
 							</SelectContent>
@@ -368,6 +416,22 @@ export const ShowOverviewServices = () => {
 								))}
 							</SelectContent>
 						</Select>
+						{hasActiveFilters && (
+							<Button variant="ghost" size="sm" onClick={clearFilters}>
+								Clear filters
+							</Button>
+						)}
+						<Button
+							variant="outline"
+							size="icon"
+							aria-label="Refresh services"
+							onClick={() => refetch()}
+							disabled={isLoading || isRefetching}
+						>
+							<RotateCw
+								className={cn("size-4", isRefetching && "animate-spin")}
+							/>
+						</Button>
 					</div>
 				</div>
 
@@ -379,71 +443,106 @@ export const ShowOverviewServices = () => {
 				)}
 
 				{!isLoading && filteredServices.length === 0 && (
-					<div className="flex flex-col items-center justify-center gap-2 py-16 text-muted-foreground">
-						<span>No services match the current filters.</span>
+					<div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
+						{services && services.length > 0 ? (
+							<>
+								<span>No services match the current filters.</span>
+								{hasActiveFilters && (
+									<Button variant="outline" size="sm" onClick={clearFilters}>
+										Clear filters
+									</Button>
+								)}
+							</>
+						) : (
+							<span>
+								No services yet. Create one from a project to see it here.
+							</span>
+						)}
 					</div>
 				)}
 
 				{!isLoading && filteredServices.length > 0 && (
 					<>
-						<Table>
-							<TableHeader>
-								<TableRow>
-									<TableHead>Service</TableHead>
-									<TableHead>Type</TableHead>
-									<TableHead>Status</TableHead>
-									<TableHead>Server</TableHead>
-									<TableHead>Created</TableHead>
-									<TableHead>Last Deploy</TableHead>
-									<TableHead className="text-right">Actions</TableHead>
-								</TableRow>
-							</TableHeader>
-							<TableBody>
-								{pagedServices.map((service) => {
-									const href = `/dashboard/project/${service.projectId}/environment/${service.environmentId}/services/${service.type}/${service.id}`;
-									const hasActions = service.type in actionsByType;
-									return (
-										<TableRow key={service.id}>
-											<TableCell>
-												<Link href={href} className="flex items-center gap-2">
-													{renderIcon(service)}
-													<div className="flex flex-col min-w-0">
-														<span className="font-medium truncate">
-															{service.name}
+						<div className="w-full overflow-x-auto">
+							<Table>
+								<TableHeader>
+									<TableRow>
+										<TableHead>Service</TableHead>
+										<TableHead>Type</TableHead>
+										<TableHead>Status</TableHead>
+										<TableHead>Server</TableHead>
+										<TableHead>Created</TableHead>
+										<TableHead>Last Deploy</TableHead>
+										<TableHead className="text-right">Actions</TableHead>
+									</TableRow>
+								</TableHeader>
+								<TableBody>
+									{pagedServices.map((service) => {
+										const href = `/dashboard/project/${service.projectId}/environment/${service.environmentId}/services/${service.type}/${service.id}`;
+										const hasActions = service.type in actionsByType;
+										return (
+											<TableRow key={service.id}>
+												<TableCell>
+													<Link href={href} className="flex items-center gap-2">
+														{renderIcon(service)}
+														<div className="flex flex-col min-w-0">
+															<span className="font-medium truncate">
+																{service.name}
+															</span>
+															<span className="text-xs font-normal text-muted-foreground">
+																{service.projectName} /{" "}
+																{service.environmentName}
+															</span>
+														</div>
+													</Link>
+												</TableCell>
+												<TableCell>{TYPE_LABELS[service.type]}</TableCell>
+												<TableCell>
+													<span className="flex items-center gap-2">
+														<span
+															className={cn(
+																"size-2.5 shrink-0 rounded-full",
+																STATUS_DOT_CLASSES[service.status ?? ""] ??
+																	"bg-muted-foreground",
+															)}
+														/>
+														<span className="text-sm">
+															{getOverviewStatusLabel(service.status)}
 														</span>
-														<span className="text-xs font-normal text-muted-foreground">
-															{service.projectName} / {service.environmentName}
+													</span>
+												</TableCell>
+												<TableCell>
+													<div className="flex items-center gap-1.5 text-muted-foreground">
+														<ServerIcon className="size-3.5" />
+														<span className="truncate">
+															{service.serverName ?? "Dokploy server"}
 														</span>
 													</div>
-												</Link>
-											</TableCell>
-											<TableCell>{TYPE_LABELS[service.type]}</TableCell>
-											<TableCell>
-												<StatusTooltip
-													status={service.status as any}
-													className="size-2.5"
-												/>
-											</TableCell>
-											<TableCell>
-												<div className="flex items-center gap-1.5 text-muted-foreground">
-													<ServerIcon className="size-3.5" />
-													<span className="truncate">
-														{service.serverName ?? "Dokploy server"}
-													</span>
-												</div>
-											</TableCell>
-											<TableCell>
-												<DateTooltip date={service.createdAt} />
-											</TableCell>
-											<TableCell>
-												{service.lastDeployAt ? (
-													<DateTooltip date={service.lastDeployAt} />
-												) : (
-													<span className="text-muted-foreground">—</span>
-												)}
-											</TableCell>
-											<TableCell className="text-right">
-												{hasActions && (
+												</TableCell>
+												<TableCell>
+													<DateTooltip date={service.createdAt} />
+												</TableCell>
+												<TableCell>
+													{service.lastDeployAt ? (
+														<DateTooltip date={service.lastDeployAt} />
+													) : DEPLOYABLE_SERVICE_TYPES.has(service.type) ? (
+														<span className="text-muted-foreground">Never</span>
+													) : (
+														<TooltipProvider delayDuration={0}>
+															<Tooltip>
+																<TooltipTrigger className="text-muted-foreground cursor-default">
+																	n/a
+																</TooltipTrigger>
+																<TooltipContent>
+																	{TYPE_LABELS[service.type]} services are
+																	started directly and keep no deployment
+																	history.
+																</TooltipContent>
+															</Tooltip>
+														</TooltipProvider>
+													)}
+												</TableCell>
+												<TableCell className="text-right">
 													<DropdownMenu>
 														<DropdownMenuTrigger asChild>
 															<Button variant="ghost" className="h-8 w-8 p-0">
@@ -455,44 +554,61 @@ export const ShowOverviewServices = () => {
 															<DropdownMenuLabel className="truncate">
 																{service.name}
 															</DropdownMenuLabel>
-															<DialogAction
-																title="Deploy Service"
-																description={`Are you sure you want to deploy "${service.name}"?`}
-																type="default"
-																onClick={() => handleAction(service, "deploy")}
-															>
-																<DropdownMenuItem
+															<DropdownMenuItem asChild>
+																<Link
+																	href={href}
 																	className="flex items-center gap-2"
-																	onSelect={(e) => e.preventDefault()}
 																>
-																	<RefreshCw className="size-4" />
-																	Deploy
-																</DropdownMenuItem>
-															</DialogAction>
-															<DialogAction
-																title="Stop Service"
-																description={`Are you sure you want to stop "${service.name}"?`}
-																onClick={() => handleAction(service, "stop")}
-															>
-																<DropdownMenuItem
-																	className="flex items-center gap-2 text-orange-500 focus:text-orange-500"
-																	onSelect={(e) => e.preventDefault()}
-																>
-																	<Ban className="size-4" />
-																	Stop
-																</DropdownMenuItem>
-															</DialogAction>
+																	<ExternalLink className="size-4" />
+																	Open service
+																</Link>
+															</DropdownMenuItem>
+															{hasActions && (
+																<>
+																	<DialogAction
+																		title="Deploy Service"
+																		description={`Are you sure you want to deploy "${service.name}"?`}
+																		type="default"
+																		onClick={() =>
+																			handleAction(service, "deploy")
+																		}
+																	>
+																		<DropdownMenuItem
+																			className="flex items-center gap-2"
+																			onSelect={(e) => e.preventDefault()}
+																		>
+																			<RefreshCw className="size-4" />
+																			Deploy
+																		</DropdownMenuItem>
+																	</DialogAction>
+																	<DialogAction
+																		title="Stop Service"
+																		description={`Are you sure you want to stop "${service.name}"?`}
+																		onClick={() =>
+																			handleAction(service, "stop")
+																		}
+																	>
+																		<DropdownMenuItem
+																			className="flex items-center gap-2 text-orange-500 focus:text-orange-500"
+																			onSelect={(e) => e.preventDefault()}
+																		>
+																			<Ban className="size-4" />
+																			Stop
+																		</DropdownMenuItem>
+																	</DialogAction>
+																</>
+															)}
 														</DropdownMenuContent>
 													</DropdownMenu>
-												)}
-											</TableCell>
-										</TableRow>
-									);
-								})}
-							</TableBody>
-						</Table>
+												</TableCell>
+											</TableRow>
+										);
+									})}
+								</TableBody>
+							</Table>
+						</div>
 
-						<div className="flex items-center justify-between text-sm text-muted-foreground">
+						<div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
 							<span>
 								{filteredServices.length}{" "}
 								{filteredServices.length === 1 ? "service" : "services"} total
