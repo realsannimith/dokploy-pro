@@ -47,6 +47,7 @@ const parseToolCalls = (raw?: string | null): AgentToolCall[] => {
 };
 
 export const AgentChat = () => {
+	const utils = api.useUtils();
 	const { data: agent } = api.agent.get.useQuery();
 	const { data: conversations, refetch: refetchConversations } =
 		api.agent.conversations.useQuery(undefined, {
@@ -65,8 +66,13 @@ export const AgentChat = () => {
 
 	const { mutateAsync: chat, isPending: isChatting } =
 		api.agent.chat.useMutation();
-	const { mutateAsync: removeConversation } =
+	const { mutateAsync: removeConversation, isPending: isDeletingConversation } =
 		api.agent.deleteConversation.useMutation();
+	const {
+		mutateAsync: clearConversationHistory,
+		isPending: isClearingHistory,
+	} = api.agent.clearConversationHistory.useMutation();
+	const isUpdatingHistory = isDeletingConversation || isClearingHistory;
 
 	useEffect(() => {
 		bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -110,6 +116,24 @@ export const AgentChat = () => {
 		}
 	};
 
+	const handleClearHistory = async () => {
+		try {
+			const { deletedCount } = await clearConversationHistory();
+			setSelectedId(undefined);
+			await Promise.all([
+				utils.agent.conversations.invalidate(),
+				utils.agent.messages.invalidate(),
+			]);
+			toast.success(
+				deletedCount === 1
+					? "1 conversation deleted"
+					: `${deletedCount} conversations deleted`,
+			);
+		} catch {
+			toast.error("Failed to clear chat history");
+		}
+	};
+
 	return (
 		<Card className="rounded-lg w-full bg-sidebar p-2.5">
 			<div className="rounded-xl bg-background shadow-md">
@@ -130,6 +154,7 @@ export const AgentChat = () => {
 								variant="outline"
 								size="sm"
 								onClick={() => setSelectedId(undefined)}
+								disabled={isChatting || isUpdatingHistory}
 							>
 								<Plus className="size-4" />
 								New chat
@@ -158,7 +183,7 @@ export const AgentChat = () => {
 											</div>
 											<DialogAction
 												title="Delete conversation"
-												description="This removes the conversation and its messages."
+												description="This removes the conversation, its messages, and any pending confirmations."
 												onClick={() =>
 													handleDelete(conversation.conversationId)
 												}
@@ -167,6 +192,8 @@ export const AgentChat = () => {
 													variant="ghost"
 													size="icon"
 													className="size-6 opacity-0 group-hover:opacity-100"
+													disabled={isChatting || isUpdatingHistory}
+													aria-label={`Delete ${conversation.title || "untitled conversation"}`}
 													onClick={(event) => event.stopPropagation()}
 												>
 													<Trash2 className="size-3.5" />
@@ -181,6 +208,30 @@ export const AgentChat = () => {
 									)}
 								</div>
 							</ScrollArea>
+							<DialogAction
+								title="Clear all chat history?"
+								description="This permanently deletes every AI agent conversation, message, and pending confirmation from the web chat and connected channels. Agent memory, skills, and settings are kept."
+								disabled={isClearingHistory}
+								onClick={() => void handleClearHistory()}
+							>
+								<Button
+									variant="ghost"
+									size="sm"
+									className="w-full text-destructive hover:text-destructive"
+									disabled={
+										(conversations ?? []).length === 0 ||
+										isChatting ||
+										isUpdatingHistory
+									}
+								>
+									{isClearingHistory ? (
+										<Loader2 className="size-4 animate-spin" />
+									) : (
+										<Trash2 className="size-4" />
+									)}
+									{isClearingHistory ? "Clearing…" : "Clear history"}
+								</Button>
+							</DialogAction>
 						</div>
 
 						<div className="flex flex-col border rounded-lg">
@@ -262,11 +313,16 @@ export const AgentChat = () => {
 											? "Ask the agent something…"
 											: "Enable the agent first to chat"
 									}
-									disabled={!agent.isEnabled || isChatting}
+									disabled={!agent.isEnabled || isChatting || isUpdatingHistory}
 								/>
 								<Button
 									onClick={() => void sendMessage()}
-									disabled={!agent.isEnabled || isChatting || !input.trim()}
+									disabled={
+										!agent.isEnabled ||
+										isChatting ||
+										isUpdatingHistory ||
+										!input.trim()
+									}
 									size="icon"
 								>
 									{isChatting ? (

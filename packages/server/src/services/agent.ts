@@ -403,6 +403,14 @@ export const deleteConversation = async (conversationId: string) => {
 	return true;
 };
 
+export const deleteConversationsByAgentId = async (agentId: string) => {
+	const deleted = await db
+		.delete(agentConversation)
+		.where(eq(agentConversation.agentId, agentId))
+		.returning({ conversationId: agentConversation.conversationId });
+	return deleted.length;
+};
+
 const PENDING_ACTION_TTL_MS = 15 * 60 * 1000;
 
 export const createPendingAction = async (input: {

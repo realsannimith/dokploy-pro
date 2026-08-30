@@ -13,6 +13,7 @@ import {
 	deleteAgentMemory,
 	deleteAgentSkill,
 	deleteConversation,
+	deleteConversationsByAgentId,
 	findAgentByOrganizationId,
 	findAgentMemories,
 	findAgentSkills,
@@ -368,4 +369,10 @@ export const agentRouter = createTRPCRouter({
 			);
 			return await deleteConversation(input.conversationId);
 		}),
+
+	clearConversationHistory: adminProcedure.mutation(async ({ ctx }) => {
+		const agent = await requireAgent(ctx.session.activeOrganizationId);
+		const deletedCount = await deleteConversationsByAgentId(agent.agentId);
+		return { deletedCount };
+	}),
 });
