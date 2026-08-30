@@ -27,6 +27,7 @@ const mockMemberData = (
 
 let memberToReturn: ReturnType<typeof mockMemberData> =
 	mockMemberData("member");
+let customRolesToReturn: Array<{ permission: string }> = [];
 
 vi.mock("@dokploy/server/db", () => ({
 	db: {
@@ -37,20 +38,16 @@ vi.mock("@dokploy/server/db", () => ({
 			},
 			organizationRole: {
 				findFirst: vi.fn(),
-				findMany: vi.fn(() => Promise.resolve([])),
+				findMany: vi.fn(() => Promise.resolve(customRolesToReturn)),
 			},
 		},
 	},
 }));
 
-vi.mock("@dokploy/server/services/proprietary/license-key", () => ({
-	hasValidLicense: vi.fn(() => Promise.resolve(false)),
-}));
-
 const { resolvePermissions } = await import(
 	"@dokploy/server/services/permission"
 );
-const { enterpriseOnlyResources, statements } = await import(
+const { advancedResources, statements } = await import(
 	"@dokploy/server/lib/access-control"
 );
 
@@ -61,14 +58,15 @@ const ctx = {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	customRolesToReturn = [];
 });
 
-describe("enterprise resources for static roles", () => {
-	it("owner gets true for all enterprise resources", async () => {
+describe("advanced resources for static roles", () => {
+	it("owner gets true for all advanced resources", async () => {
 		memberToReturn = mockMemberData("owner");
 		const perms = await resolvePermissions(ctx);
 
-		for (const resource of enterpriseOnlyResources) {
+		for (const resource of advancedResources) {
 			const actions = statements[resource as keyof typeof statements];
 			for (const action of actions) {
 				expect((perms as any)[resource][action]).toBe(true);
@@ -76,11 +74,11 @@ describe("enterprise resources for static roles", () => {
 		}
 	});
 
-	it("admin gets true for all enterprise resources", async () => {
+	it("admin gets true for all advanced resources", async () => {
 		memberToReturn = mockMemberData("admin");
 		const perms = await resolvePermissions(ctx);
 
-		for (const resource of enterpriseOnlyResources) {
+		for (const resource of advancedResources) {
 			const actions = statements[resource as keyof typeof statements];
 			for (const action of actions) {
 				expect((perms as any)[resource][action]).toBe(true);
@@ -88,7 +86,7 @@ describe("enterprise resources for static roles", () => {
 		}
 	});
 
-	it("member gets true for service-level enterprise resources", async () => {
+	it("member gets true for service-level advanced resources", async () => {
 		memberToReturn = mockMemberData("member");
 		const perms = await resolvePermissions(ctx);
 
@@ -100,7 +98,7 @@ describe("enterprise resources for static roles", () => {
 		expect(perms.monitoring.read).toBe(true);
 	});
 
-	it("member gets false for org-level enterprise resources", async () => {
+	it("member gets false for organization-level advanced resources", async () => {
 		memberToReturn = mockMemberData("member");
 		const perms = await resolvePermissions(ctx);
 
@@ -163,7 +161,7 @@ describe("free-tier resources for member", () => {
 	});
 });
 
-describe("free-tier resources for owner", () => {
+describe("core resources for owner", () => {
 	it("owner gets all free-tier permissions as true", async () => {
 		memberToReturn = mockMemberData("owner");
 		const perms = await resolvePermissions(ctx);
@@ -175,5 +173,26 @@ describe("free-tier resources for owner", () => {
 		expect(perms.docker.read).toBe(true);
 		expect(perms.traefikFiles.read).toBe(true);
 		expect(perms.traefikFiles.write).toBe(true);
+	});
+});
+
+describe("custom roles", () => {
+	it("resolves configured permissions without any license state", async () => {
+		memberToReturn = mockMemberData("deployer");
+		customRolesToReturn = [
+			{
+				permission: JSON.stringify({
+					deployment: ["read"],
+					logs: ["read"],
+				}),
+			},
+		];
+
+		const permissions = await resolvePermissions(ctx);
+
+		expect(permissions.deployment.read).toBe(true);
+		expect(permissions.deployment.create).toBe(false);
+		expect(permissions.logs.read).toBe(true);
+		expect(permissions.registry.read).toBe(false);
 	});
 });

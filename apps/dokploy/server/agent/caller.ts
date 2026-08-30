@@ -49,8 +49,6 @@ export const createAgentCaller = async (
 			name: memberResult.user.firstName,
 			role: memberResult.role as "owner" | "admin" | "member",
 			ownerId: memberResult.organization.ownerId,
-			enableEnterpriseFeatures: memberResult.user.enableEnterpriseFeatures,
-			isValidEnterpriseLicense: memberResult.user.isValidEnterpriseLicense,
 		} as any,
 	};
 

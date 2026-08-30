@@ -8,7 +8,7 @@ import { createAccessControl } from "better-auth/plugins/access";
  * used internally by the organization plugin.
  * The rest are Dokploy-specific resources.
  *
- * Enterprise-only resources (only assignable via custom roles):
+ * Advanced resources (fine-grained assignment is available through custom roles):
  * deployment, envVars, server, registry, certificate, backup, domain, logs, monitoring
  */
 export const statements = {
@@ -19,7 +19,7 @@ export const statements = {
 	team: ["create", "update", "delete"],
 	ac: ["create", "read", "update", "delete"],
 
-	// Dokploy core resources (free tier)
+	// Dokploy core resources
 	project: ["create", "delete"],
 	service: ["create", "read", "delete"],
 	environment: ["create", "read", "delete"],
@@ -29,7 +29,7 @@ export const statements = {
 	traefikFiles: ["read", "write"],
 	api: ["read"],
 
-	// Enterprise-only resources (custom roles only)
+	// Advanced resources (fine-grained custom-role permissions)
 	volume: ["read", "create", "delete"],
 	deployment: ["read", "create", "cancel"],
 	envVars: ["read", "write"],
@@ -53,11 +53,11 @@ export const statements = {
 } as const;
 
 /**
- * Enterprise-only resources. For static roles (owner/admin/member),
+ * Advanced resources. For static roles (owner/admin/member),
  * permission checks on these resources are bypassed — they only apply
- * when using custom roles with an enterprise license.
+ * when using custom roles.
  */
-export const enterpriseOnlyResources = new Set<string>([
+export const advancedResources = new Set<string>([
 	"volume",
 	"deployment",
 	"envVars",
@@ -161,10 +161,10 @@ export const adminRole = ac.newRole({
 });
 
 /**
- * Member role (free tier) — read-only base permissions.
+ * Member role — read-only base permissions.
  * Members can read projects/services/environments they have access to,
  * but cannot create, delete, or access admin resources.
- * Enterprise resources are not available to the base member role.
+ * Organization-level administrative resources are not available to the base member role.
  */
 export const memberRole = ac.newRole({
 	organization: [],
@@ -180,7 +180,7 @@ export const memberRole = ac.newRole({
 	gitProviders: [],
 	traefikFiles: [],
 	api: [],
-	// Service-level enterprise resources — member can do everything within services they have access to
+	// Service-level resources — members can operate within services they can access
 	volume: ["read", "create", "delete"],
 	deployment: ["read", "create", "cancel"],
 	envVars: ["read", "write"],
@@ -192,7 +192,7 @@ export const memberRole = ac.newRole({
 	domain: ["read", "create", "delete"],
 	logs: ["read"],
 	monitoring: ["read"],
-	// Org-level enterprise resources — member cannot manage these
+	// Organization-level resources — members cannot manage these
 	server: [],
 	registry: [],
 	certificate: [],

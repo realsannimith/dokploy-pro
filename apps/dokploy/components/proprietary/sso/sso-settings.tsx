@@ -167,7 +167,7 @@ export const SSOSettings = () => {
 						<CardTitle className="text-xl">Single Sign-On (SSO)</CardTitle>
 					</div>
 					<CardDescription>
-						Configure OIDC or SAML identity providers for enterprise sign-in.
+						Configure OIDC or SAML identity providers for organization sign-in.
 						Users can sign in with their organization&apos;s IdP.
 					</CardDescription>
 				</div>

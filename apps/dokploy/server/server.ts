@@ -6,7 +6,6 @@ import {
 	IS_CLOUD,
 	initCancelDeployments,
 	initCronJobs,
-	initEnterpriseBackupCronJobs,
 	initializeNetwork,
 	initSchedules,
 	initVolumeBackupsCronJobs,
@@ -67,8 +66,6 @@ void app.prepare().then(async () => {
 			await initVolumeBackupsCronJobs();
 			await sendDokployRestartNotifications();
 		}
-		await initEnterpriseBackupCronJobs();
-
 		const { initAgentGateways } = await import("./agent/gateways");
 		await initAgentGateways();
 

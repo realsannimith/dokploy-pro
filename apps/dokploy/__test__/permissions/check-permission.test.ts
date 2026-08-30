@@ -27,6 +27,7 @@ const mockMemberData = (
 
 let memberToReturn: ReturnType<typeof mockMemberData> =
 	mockMemberData("member");
+let customRolesToReturn: Array<{ permission: string }> = [];
 
 vi.mock("@dokploy/server/db", () => ({
 	db: {
@@ -37,14 +38,10 @@ vi.mock("@dokploy/server/db", () => ({
 			},
 			organizationRole: {
 				findFirst: vi.fn(),
-				findMany: vi.fn(() => Promise.resolve([])),
+				findMany: vi.fn(() => Promise.resolve(customRolesToReturn)),
 			},
 		},
 	},
-}));
-
-vi.mock("@dokploy/server/services/proprietary/license-key", () => ({
-	hasValidLicense: vi.fn(() => Promise.resolve(false)),
 }));
 
 const { checkPermission } = await import("@dokploy/server/services/permission");
@@ -56,9 +53,10 @@ const ctx = {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	customRolesToReturn = [];
 });
 
-describe("owner and admin bypass enterprise resources", () => {
+describe("owner and admin bypass advanced-resource checks", () => {
 	it("owner bypasses deployment.read", async () => {
 		memberToReturn = mockMemberData("owner");
 		await expect(
@@ -73,7 +71,7 @@ describe("owner and admin bypass enterprise resources", () => {
 		).resolves.toBeUndefined();
 	});
 
-	it("owner bypasses multiple enterprise permissions at once", async () => {
+	it("owner bypasses multiple advanced permissions at once", async () => {
 		memberToReturn = mockMemberData("owner");
 		await expect(
 			checkPermission(ctx, {
@@ -85,7 +83,7 @@ describe("owner and admin bypass enterprise resources", () => {
 	});
 });
 
-describe("member is denied org-level enterprise resources (CVE: bypass via staticRoles)", () => {
+describe("member is denied organization-level advanced resources", () => {
 	it("member is denied registry.read", async () => {
 		memberToReturn = mockMemberData("member");
 		await expect(
@@ -134,7 +132,7 @@ describe("member is denied org-level enterprise resources (CVE: bypass via stati
 	});
 });
 
-describe("static roles validate free-tier resources", () => {
+describe("static roles validate core resources", () => {
 	it("owner passes project.create", async () => {
 		memberToReturn = mockMemberData("owner");
 		await expect(
@@ -160,6 +158,37 @@ describe("static roles validate free-tier resources", () => {
 		memberToReturn = mockMemberData("member");
 		await expect(
 			checkPermission(ctx, { service: ["create"] }),
+		).rejects.toThrow();
+	});
+});
+
+describe("custom roles", () => {
+	it("grants configured permissions without any license state", async () => {
+		memberToReturn = mockMemberData("deployer");
+		customRolesToReturn = [
+			{
+				permission: JSON.stringify({
+					deployment: ["read"],
+					logs: ["read"],
+				}),
+			},
+		];
+
+		await expect(
+			checkPermission(ctx, { deployment: ["read"], logs: ["read"] }),
+		).resolves.toBeUndefined();
+	});
+
+	it("still denies permissions that the custom role was not granted", async () => {
+		memberToReturn = mockMemberData("deployer");
+		customRolesToReturn = [
+			{
+				permission: JSON.stringify({ deployment: ["read"] }),
+			},
+		];
+
+		await expect(
+			checkPermission(ctx, { registry: ["read"] }),
 		).rejects.toThrow();
 	});
 });
