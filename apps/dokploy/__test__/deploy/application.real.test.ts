@@ -60,6 +60,18 @@ vi.mock("@dokploy/server/services/admin", () => ({
 	getDokployUrl: vi.fn().mockResolvedValue("http://localhost:3000"),
 }));
 
+vi.mock("@dokploy/server/services/automatic-application-domain", () => ({
+	ensureAutomaticApplicationDomain: vi.fn().mockResolvedValue({
+		status: "skipped",
+		reason: "previously-deployed",
+	}),
+}));
+
+vi.mock("@dokploy/server/services/domain", () => ({
+	findDomainsByApplicationId: vi.fn().mockResolvedValue([]),
+	getDomainHost: vi.fn(),
+}));
+
 vi.mock("@dokploy/server/services/deployment", () => ({
 	createDeployment: vi.fn(),
 	updateDeploymentStatus: vi.fn(),

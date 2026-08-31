@@ -1,7 +1,7 @@
 import { validateRequest } from "@dokploy/server/lib/auth";
 import { createServerSideHelpers } from "@trpc/react-query/server";
 import copy from "copy-to-clipboard";
-import { HelpCircle, ServerOff } from "lucide-react";
+import { ExternalLink, HelpCircle, ServerOff } from "lucide-react";
 import type {
 	GetServerSidePropsContext,
 	InferGetServerSidePropsType,
@@ -21,6 +21,7 @@ import { ShowBuildServer } from "@/components/dashboard/application/advanced/sho
 import { ShowResources } from "@/components/dashboard/application/advanced/show-resources";
 import { ShowTraefikConfig } from "@/components/dashboard/application/advanced/traefik/show-traefik-config";
 import { ShowVolumes } from "@/components/dashboard/application/advanced/volumes/show-volumes";
+import { getFirstEnabledApplicationDomainLink } from "@/components/dashboard/application/application-domain-link";
 import { ShowDeployments } from "@/components/dashboard/application/deployments/show-deployments";
 import { ShowDomains } from "@/components/dashboard/application/domains/show-domains";
 import { ShowEnvironment } from "@/components/dashboard/application/environment/show";
@@ -40,6 +41,7 @@ import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { AdvanceBreadcrumb } from "@/components/shared/advance-breadcrumb";
 import { StatusTooltip } from "@/components/shared/status-tooltip";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
 	Card,
 	CardContent,
@@ -102,6 +104,9 @@ const Service = (
 	});
 	const { config: whitelabeling } = useWhitelabeling();
 	const appName = whitelabeling?.appName || "Dokploy";
+	const applicationDomainLink = getFirstEnabledApplicationDomainLink(
+		data?.domains,
+	);
 	const environmentDropdownItems =
 		environments?.map((env) => ({
 			name: env.name,
@@ -121,8 +126,8 @@ const Service = (
 			<div className="w-full">
 				<Card className="h-full bg-sidebar p-2.5 rounded-xl w-full">
 					<div className="rounded-xl bg-background shadow-md ">
-						<CardHeader className="flex flex-row justify-between items-center">
-							<div className="flex flex-col">
+						<CardHeader className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+							<div className="flex min-w-0 flex-col">
 								<CardTitle className="text-xl flex flex-row gap-2 items-center">
 									<div className="relative flex flex-row gap-4 items-center">
 										<ShowIconSettings
@@ -144,8 +149,8 @@ const Service = (
 									{data?.appName}
 								</span>
 							</div>
-							<div className="flex flex-col h-fit w-fit gap-2">
-								<div className="flex flex-row h-fit w-fit gap-2">
+							<div className="flex h-fit w-full flex-col items-start gap-2 sm:w-fit sm:items-end">
+								<div className="flex h-fit w-fit flex-row gap-2">
 									<Badge
 										className="cursor-pointer"
 										onClick={() => {
@@ -189,7 +194,27 @@ const Service = (
 									)}
 								</div>
 
-								<div className="flex flex-row gap-2 justify-end">
+								<div className="flex flex-row flex-wrap items-start justify-start gap-2 sm:justify-end">
+									{applicationDomainLink && (
+										<div className="flex flex-col items-start gap-1 sm:items-end">
+											<Button asChild variant="outline">
+												<a
+													href={applicationDomainLink.href}
+													target="_blank"
+													rel="noopener noreferrer"
+													aria-label={`Open ${data?.name || "application"} in a new tab`}
+												>
+													<ExternalLink className="size-4" />
+													Open Application
+												</a>
+											</Button>
+											{applicationDomainLink.isTemporaryHttpDomain && (
+												<span className="text-xs text-muted-foreground">
+													Temporary HTTP domain
+												</span>
+											)}
+										</div>
+									)}
 									{permissions?.service.create && (
 										<UpdateApplication applicationId={applicationId} />
 									)}

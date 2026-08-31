@@ -1,7 +1,9 @@
 import * as adminService from "@dokploy/server/services/admin";
 import * as applicationService from "@dokploy/server/services/application";
 import { deployApplication } from "@dokploy/server/services/application";
+import * as automaticDomainService from "@dokploy/server/services/automatic-application-domain";
 import * as deploymentService from "@dokploy/server/services/deployment";
+import * as domainService from "@dokploy/server/services/domain";
 import * as builders from "@dokploy/server/utils/builders";
 import * as notifications from "@dokploy/server/utils/notifications/build-success";
 import * as execProcess from "@dokploy/server/utils/process/execAsync";
@@ -57,6 +59,15 @@ vi.mock("@dokploy/server/services/application", async () => {
 
 vi.mock("@dokploy/server/services/admin", () => ({
 	getDokployUrl: vi.fn(),
+}));
+
+vi.mock("@dokploy/server/services/automatic-application-domain", () => ({
+	ensureAutomaticApplicationDomain: vi.fn(),
+}));
+
+vi.mock("@dokploy/server/services/domain", () => ({
+	findDomainsByApplicationId: vi.fn(),
+	getDomainHost: vi.fn(),
 }));
 
 vi.mock("@dokploy/server/services/deployment", () => ({
@@ -155,6 +166,13 @@ describe("deployApplication - Command Generation Tests", () => {
 		vi.mocked(deploymentService.createDeployment).mockResolvedValue(
 			createMockDeployment() as any,
 		);
+		vi.mocked(
+			automaticDomainService.ensureAutomaticApplicationDomain,
+		).mockResolvedValue({
+			status: "skipped",
+			reason: "previously-deployed",
+		});
+		vi.mocked(domainService.findDomainsByApplicationId).mockResolvedValue([]);
 		vi.mocked(execProcess.execAsync).mockResolvedValue({
 			stdout: "",
 			stderr: "",
@@ -283,5 +301,66 @@ describe("deployApplication - Command Generation Tests", () => {
 		const fullCommand = execCalls[0]?.[0];
 
 		expect(fullCommand).toContain(">> /tmp/test-deployment.log 2>&1");
+	});
+
+	it("creates and refreshes the first-deployment domain before success", async () => {
+		const generatedDomain = {
+			domainId: "domain-1",
+			host: "test-app-abcdef-192-0-2-10.sslip.io",
+		};
+		vi.mocked(
+			automaticDomainService.ensureAutomaticApplicationDomain,
+		).mockResolvedValue({
+			status: "created",
+			domain: generatedDomain as any,
+		});
+		vi.mocked(domainService.findDomainsByApplicationId).mockResolvedValue([
+			generatedDomain as any,
+		]);
+
+		await deployApplication({
+			applicationId: "test-app-id",
+			titleLog: "Test",
+			descriptionLog: "",
+		});
+
+		expect(
+			vi.mocked(builders.mechanizeDockerContainer).mock.invocationCallOrder[0],
+		).toBeLessThan(
+			vi.mocked(automaticDomainService.ensureAutomaticApplicationDomain).mock
+				.invocationCallOrder[0] || 0,
+		);
+		expect(
+			vi.mocked(automaticDomainService.ensureAutomaticApplicationDomain).mock
+				.invocationCallOrder[0],
+		).toBeLessThan(
+			vi.mocked(deploymentService.updateDeploymentStatus).mock
+				.invocationCallOrder[0] || 0,
+		);
+		expect(notifications.sendBuildSuccessNotifications).toHaveBeenCalledWith(
+			expect.objectContaining({ domains: [generatedDomain] }),
+		);
+	});
+
+	it("keeps a successful deployment successful if automatic domain creation fails", async () => {
+		vi.mocked(
+			automaticDomainService.ensureAutomaticApplicationDomain,
+		).mockRejectedValue(new Error("routing unavailable"));
+
+		await expect(
+			deployApplication({
+				applicationId: "test-app-id",
+				titleLog: "Test",
+				descriptionLog: "",
+			}),
+		).resolves.toBe(true);
+		expect(deploymentService.updateDeploymentStatus).toHaveBeenCalledWith(
+			"deployment-id",
+			"done",
+		);
+		expect(execProcess.execAsync).toHaveBeenCalledWith(
+			expect.stringContaining('base64 -d >> "/tmp/test-deployment.log"'),
+		);
+		expect(notifications.sendBuildSuccessNotifications).toHaveBeenCalledOnce();
 	});
 });

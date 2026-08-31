@@ -1,4 +1,4 @@
-import type { Schema } from "@dokploy/server/templates";
+import { generateRandomDomain, type Schema } from "@dokploy/server/templates";
 import { processValue } from "@dokploy/server/templates/processors";
 import { describe, expect, it } from "vitest";
 
@@ -32,6 +32,32 @@ describe("helpers functions", () => {
 			expect(
 				domain.endsWith(`${mockSchema.serverIp.replaceAll(".", "-")}.sslip.io`),
 			).toBeTruthy();
+		});
+
+		it("sanitizes the project name into a valid DNS label", () => {
+			const domain = generateRandomDomain({
+				projectName: "My_App / API!!!",
+				serverIp: "192.0.2.10",
+			});
+			const [label] = domain.split(".sslip.io");
+
+			expect(label).toMatch(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/);
+			expect(label).toMatch(/^my-app-api-[a-f0-9]{6}-192-0-2-10$/);
+		});
+
+		it("keeps the label valid with a fully expanded IPv6 address", () => {
+			const domain = generateRandomDomain({
+				projectName:
+					"application_name_that_is_intentionally_far_longer_than_one_dns_label",
+				serverIp: "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+			});
+			const [label] = domain.split(".sslip.io");
+
+			expect(label?.length).toBeLessThanOrEqual(63);
+			expect(label).toMatch(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/);
+			expect(domain).toMatch(
+				/-2001-0db8-85a3-0000-0000-8a2e-0370-7334\.sslip\.io$/,
+			);
 		});
 	});
 

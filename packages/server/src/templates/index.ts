@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { join } from "node:path";
 import type { Domain } from "@dokploy/server/services/domain";
 import { TRPCError } from "@trpc/server";
@@ -35,19 +36,83 @@ export const generateRandomDomain = ({
 	projectName,
 }: Schema): string => {
 	const hash = randomBytes(3).toString("hex");
-	const effectiveIp = serverIp || "127.0.0.1";
-	const slugIp = effectiveIp.replaceAll(".", "-").replaceAll(":", "-");
+	const effectiveIp = serverIp.trim() || "127.0.0.1";
+	const slugIp = formatIpForDomain(effectiveIp);
+	const sanitizedProjectName =
+		projectName
+			.toLowerCase()
+			.replace(/[^a-z0-9-]+/g, "-")
+			.replace(/-+/g, "-")
+			.replace(/^-|-$/g, "") || "app";
 
-	// Domain labels have a max length of 63 characters
-	// Reserve space for: hash (6) + separators (1-2) + ip section + dot + sslip.io (8)
-	// Approx: 6 + 2 + (variable ip length) + 9 = ~19-30 chars for other parts
-	const maxProjectNameLength = 40;
+	// The project, hash, and IP share a single DNS label (63 characters max).
+	// A fully expanded IPv6 address consumes 39 characters after slugging.
+	const maxProjectNameLength = Math.max(
+		1,
+		63 - hash.length - slugIp.length - 2,
+	);
 	const truncatedProjectName =
-		projectName.length > maxProjectNameLength
-			? projectName.substring(0, maxProjectNameLength)
-			: projectName;
+		sanitizedProjectName
+			.substring(0, maxProjectNameLength)
+			.replace(/-+$/g, "") || "app";
 
 	return `${truncatedProjectName}-${hash}-${slugIp}.sslip.io`;
+};
+
+const formatIpForDomain = (ip: string) => {
+	if (isIP(ip) === 6) {
+		return expandIpv6(ip).join("-");
+	}
+
+	return (
+		ip
+			.toLowerCase()
+			.replaceAll(".", "-")
+			.replaceAll(":", "-")
+			.replace(/[^a-z0-9-]+/g, "-")
+			.replace(/^-+|-+$/g, "")
+			.substring(0, 54)
+			.replace(/-+$/g, "") || "127-0-0-1"
+	);
+};
+
+const expandIpv6 = (ip: string) => {
+	const address = ip.toLowerCase().split("%")[0] || "";
+	const [head = "", tail = ""] = address.split("::", 2);
+	const headGroups = head ? head.split(":") : [];
+	const tailGroups = tail ? tail.split(":") : [];
+
+	const expandIpv4Tail = (groups: string[]) => {
+		const last = groups.at(-1);
+		if (!last?.includes(".")) {
+			return groups;
+		}
+		const octets = last.split(".").map(Number);
+		if (octets.length !== 4) {
+			return groups;
+		}
+		return [
+			...groups.slice(0, -1),
+			((octets[0] || 0) * 256 + (octets[1] || 0)).toString(16),
+			((octets[2] || 0) * 256 + (octets[3] || 0)).toString(16),
+		];
+	};
+
+	const normalizedHead = expandIpv4Tail(headGroups);
+	const normalizedTail = expandIpv4Tail(tailGroups);
+	const omittedGroupCount = Math.max(
+		0,
+		8 - normalizedHead.length - normalizedTail.length,
+	);
+	const groups = address.includes("::")
+		? [
+				...normalizedHead,
+				...Array.from({ length: omittedGroupCount }, () => "0"),
+				...normalizedTail,
+			]
+		: normalizedHead;
+
+	return groups.map((group) => group.padStart(4, "0"));
 };
 
 export const generateHash = (length = 8): string => {

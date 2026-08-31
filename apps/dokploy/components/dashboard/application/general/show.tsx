@@ -51,6 +51,8 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 		api.application.reload.useMutation();
 
 	const { mutateAsync: redeploy } = api.application.redeploy.useMutation();
+	const willCreateTemporaryDomain =
+		data?.domains.length === 0 && data.deployments.length === 0;
 
 	return (
 		<>
@@ -63,7 +65,11 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 						{canDeploy && (
 							<DialogAction
 								title="Deploy Application"
-								description="Are you sure you want to deploy this application?"
+								description={
+									willCreateTemporaryDomain
+										? "This first deployment will also create a temporary public HTTP address so you can open the application immediately. You can replace it with a custom domain later."
+										: "Are you sure you want to deploy this application?"
+								}
 								type="default"
 								onClick={async () => {
 									await deploy({

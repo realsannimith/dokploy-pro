@@ -33,13 +33,18 @@ import { eq } from "drizzle-orm";
 import type { z } from "zod";
 import { encodeBase64 } from "../utils/docker/utils";
 import { getDokployUrl } from "./admin";
+import { ensureAutomaticApplicationDomain } from "./automatic-application-domain";
 import {
 	createDeployment,
 	createDeploymentPreview,
 	updateDeployment,
 	updateDeploymentStatus,
 } from "./deployment";
-import { type Domain, getDomainHost } from "./domain";
+import {
+	type Domain,
+	findDomainsByApplicationId,
+	getDomainHost,
+} from "./domain";
 import {
 	createPreviewDeploymentComment,
 	getIssueComment,
@@ -176,6 +181,34 @@ export const updateApplicationStatus = async (
 	return application;
 };
 
+const appendAutomaticDomainWarning = async ({
+	error,
+	logPath,
+	serverId,
+}: {
+	error: unknown;
+	logPath: string;
+	serverId: string | null;
+}) => {
+	const detail = error instanceof Error ? error.message : String(error);
+	const message = `Warning: automatic application URL was not created: ${detail}\n`;
+	console.warn(message.trim());
+
+	try {
+		const encodedMessage = encodeBase64(message);
+		const command = `echo "${encodedMessage}" | base64 -d >> "${logPath}";`;
+		if (serverId) {
+			await execAsyncRemote(serverId, command);
+		} else {
+			await execAsync(command);
+		}
+	} catch (logError) {
+		console.warn("Failed to append automatic URL warning to deployment log", {
+			cause: logError,
+		});
+	}
+};
+
 export const deployApplication = async ({
 	applicationId,
 	titleLog = "Manual deployment",
@@ -233,6 +266,43 @@ export const deployApplication = async ({
 		}
 
 		await mechanizeDockerContainer(application);
+
+		let notificationDomains = application.domains;
+		try {
+			const automaticDomain = await ensureAutomaticApplicationDomain({
+				application,
+			});
+			if (automaticDomain.status === "created") {
+				notificationDomains = [...notificationDomains, automaticDomain.domain];
+			} else if (automaticDomain.reason === "missing-ip") {
+				await appendAutomaticDomainWarning({
+					error: new Error("the deployment server has no valid IP address"),
+					logPath: deployment.logPath,
+					serverId,
+				});
+			}
+
+			try {
+				notificationDomains = await findDomainsByApplicationId(applicationId);
+			} catch (error) {
+				await appendAutomaticDomainWarning({
+					error: new Error(
+						`the current domain list could not be refreshed: ${
+							error instanceof Error ? error.message : String(error)
+						}`,
+					),
+					logPath: deployment.logPath,
+					serverId,
+				});
+			}
+		} catch (error) {
+			await appendAutomaticDomainWarning({
+				error,
+				logPath: deployment.logPath,
+				serverId,
+			});
+		}
+
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateApplicationStatus(applicationId, "done");
 		await ensureServiceMonitoring(application.appName, application.serverId);
@@ -243,7 +313,7 @@ export const deployApplication = async ({
 			applicationType: "application",
 			buildLink,
 			organizationId: application.environment.project.organizationId,
-			domains: application.domains,
+			domains: notificationDomains,
 			environmentName: application.environment.name,
 		});
 	} catch (error) {
