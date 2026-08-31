@@ -15,7 +15,7 @@ import {
 	type ResolvedMcpPolicy,
 	resolveMcpPolicy,
 } from "@/server/mcp/policy";
-import { getMcpTools } from "@/server/mcp/registry";
+import { getMcpTools, MCP_SERVER_INSTRUCTIONS } from "@/server/mcp/registry";
 
 export const config = {
 	api: {
@@ -63,7 +63,10 @@ const buildMcpServer = (
 ) => {
 	const server = new Server(
 		{ name: "dokploy", version: "1.0.0" },
-		{ capabilities: { tools: {} } },
+		{
+			capabilities: { tools: {} },
+			instructions: MCP_SERVER_INSTRUCTIONS,
+		},
 	);
 
 	server.setRequestHandler(ListToolsRequestSchema, async () => ({

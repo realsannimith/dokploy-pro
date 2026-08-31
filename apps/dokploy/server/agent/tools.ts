@@ -55,6 +55,16 @@ export const AGENT_TOOL_META: AgentToolMeta[] = [
 		group: "Read",
 		description: "Read deployment logs",
 	},
+	{
+		name: "followDeployment",
+		group: "Read",
+		description: "Wait for a deployment and return its status and logs",
+	},
+	{
+		name: "readRuntimeLogs",
+		group: "Read",
+		description: "Read current service container logs",
+	},
 	{ name: "listSchedules", group: "Read", description: "List cron schedules" },
 	{
 		name: "listBackupFiles",
@@ -114,6 +124,13 @@ export const AGENT_TOOL_META: AgentToolMeta[] = [
 		group: "Operate",
 		description: "Deploy a service",
 		summarize: (input) => `Deploy ${input.serviceType} ${input.serviceId}`,
+	},
+	{
+		name: "configureAutoDeploy",
+		group: "Operate",
+		description: "Configure push or tag auto-deployment",
+		summarize: (input) =>
+			`${input.enabled ? "Enable" : "Disable"} auto-deploy for ${input.serviceType} ${input.serviceId}`,
 	},
 	{
 		name: "redeployService",
@@ -718,7 +735,7 @@ export const buildAgentTools = (
 		}),
 		getService: tool({
 			description:
-				"Get details for one service: current status, app name, server, domains, configured backups and their cron schedules. Database responses include both deploymentStatus (stored lifecycle) and runtime (live Docker truth); only runtime.ready=true proves the database is working. Environment variables are intentionally not included.",
+				"Get details for one service: current status, app name, server, domains, git source/branch, auto-deploy configuration, and backups. For application/compose, pushDeployReady means autoDeploy=true and triggerType=push, but the provider webhook must also be connected. Database responses include both deploymentStatus (stored lifecycle) and runtime (live Docker truth); only runtime.ready=true proves the database is working. Environment variables are intentionally not included.",
 			inputSchema: z.object({
 				serviceType: serviceTypeSchema,
 				serviceId: z
@@ -741,9 +758,26 @@ export const buildAgentTools = (
 							"createdAt",
 							"sourceType",
 							"composeType",
+							"autoDeploy",
+							"triggerType",
+							"repository",
+							"branch",
+							"gitlabRepository",
+							"gitlabBranch",
+							"bitbucketRepository",
+							"bitbucketBranch",
+							"giteaRepository",
+							"giteaBranch",
+							"customGitUrl",
+							"customGitBranch",
+							"watchPaths",
 						]),
 						serviceType,
 						serviceId,
+						pushDeployReady:
+							(serviceType === "application" || serviceType === "compose") &&
+							service.autoDeploy === true &&
+							service.triggerType === "push",
 						domains: (service.domains ?? []).map((domain: any) =>
 							pick(domain, ["host", "port", "https", "path", "serviceName"]),
 						),
@@ -759,13 +793,24 @@ export const buildAgentTools = (
 		}),
 		deployService: tool({
 			description:
-				"Trigger a deployment for a service. For applications/compose this queues a build+deploy (visible in the dashboard's deployments tab). For databases this requires multiple stable Docker running checks and then returns fresh runtime state.",
+				"Trigger a deployment for a service. For applications/compose this snapshots the previous deployment, queues a build+deploy, then returns the correlated new deployment id, current status, and log tail when it appears. If it is still in progress, call followDeployment until terminal=true. For databases this returns fresh runtime state.",
 			inputSchema: z.object({
 				serviceType: serviceTypeSchema,
 				serviceId: z.string(),
 			}),
 			execute: async ({ serviceType, serviceId }) => {
 				try {
+					let previousDeploymentId: string | undefined;
+					if (serviceType === "application" || serviceType === "compose") {
+						const latest = (await caller.deployment.latest({
+							type: serviceType,
+							id: serviceId,
+							tail: 0,
+						})) as any;
+						previousDeploymentId = latest?.found
+							? latest.deploymentId
+							: undefined;
+					}
 					switch (serviceType) {
 						case "application":
 							await caller.application.deploy({
@@ -786,9 +831,19 @@ export const buildAgentTools = (
 							break;
 					}
 					if (serviceType === "application" || serviceType === "compose") {
-						return toResult(
-							"Deployment queued. Use listDeployments to check its status.",
-						);
+						const observation = await caller.deployment.followLatest({
+							type: serviceType,
+							id: serviceId,
+							afterDeploymentId: previousDeploymentId,
+							timeoutSeconds: 5,
+							pollIntervalSeconds: 1,
+							tail: 50,
+						});
+						return toResult({
+							message:
+								"Deployment queued. A terminal=true, success=true observation is required before reporting success.",
+							observation,
+						});
 					}
 					const service = (await getService(serviceType, serviceId)) as any;
 					return toResult({
@@ -802,6 +857,53 @@ export const buildAgentTools = (
 							ready: false,
 							message: "Live runtime status was not returned",
 						},
+					});
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		configureAutoDeploy: tool({
+			description:
+				"Enable or disable automatic deployment for an application or compose service and choose push or tag triggers. Push deployment also requires the configured provider webhook and a push to the exact configured branch; use getService to inspect those values.",
+			inputSchema: z.object({
+				serviceType: z.enum(["application", "compose"]),
+				serviceId: z.string(),
+				enabled: z.boolean(),
+				triggerType: z.enum(["push", "tag"]).default("push"),
+			}),
+			execute: async ({ serviceType, serviceId, enabled, triggerType }) => {
+				try {
+					if (serviceType === "application") {
+						await caller.application.update({
+							applicationId: serviceId,
+							autoDeploy: enabled,
+							triggerType,
+						});
+					} else {
+						await caller.compose.update({
+							composeId: serviceId,
+							autoDeploy: enabled,
+							triggerType,
+						});
+					}
+					const service = (await getService(serviceType, serviceId)) as any;
+					return toResult({
+						serviceType,
+						serviceId,
+						autoDeploy: service.autoDeploy,
+						triggerType: service.triggerType,
+						sourceType: service.sourceType,
+						branch:
+							service.branch ||
+							service.gitlabBranch ||
+							service.bitbucketBranch ||
+							service.giteaBranch ||
+							service.customGitBranch ||
+							null,
+						pushDeployReady:
+							service.autoDeploy === true && service.triggerType === "push",
+						note: "The matching provider webhook must be connected. Snapshot listDeployments before a push, then call followDeployment with afterDeploymentId to correlate the new build.",
 					});
 				} catch (error) {
 					return toErrorResult(error);
@@ -949,6 +1051,185 @@ export const buildAgentTools = (
 				try {
 					const logs = await caller.deployment.readLogs({ deploymentId, tail });
 					return toResult(logs || "(log is empty)");
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		followDeployment: tool({
+			description:
+				"Wait for a known deployment or the latest deployment of an application/compose service. Use after deployService or a git push. Pass afterDeploymentId (the id seen before the action) to correlate a newly created deployment. Only terminal=true and success=true proves completion; timedOut=true means call this again, not that the deployment failed or succeeded.",
+			inputSchema: z.object({
+				type: z.enum(["application", "compose"]),
+				id: z.string().describe("applicationId or composeId"),
+				deploymentId: z
+					.string()
+					.optional()
+					.describe("Follow this exact deployment when known"),
+				afterDeploymentId: z
+					.string()
+					.optional()
+					.describe(
+						"When following latest, ignore this previous deployment and wait for a newer one",
+					),
+				waitSeconds: z.number().int().min(0).max(25).default(20),
+				tail: z.number().int().min(0).max(2000).default(100),
+			}),
+			execute: async ({
+				type,
+				id,
+				deploymentId,
+				afterDeploymentId,
+				waitSeconds,
+				tail,
+			}) => {
+				try {
+					const observation = deploymentId
+						? await caller.deployment.follow({
+								deploymentId,
+								timeoutSeconds: waitSeconds,
+								pollIntervalSeconds: 2,
+								tail,
+							})
+						: await caller.deployment.followLatest({
+								type,
+								id,
+								afterDeploymentId,
+								timeoutSeconds: waitSeconds,
+								pollIntervalSeconds: 2,
+								tail,
+							});
+					return toResult(observation);
+				} catch (error) {
+					return toErrorResult(error);
+				}
+			},
+		}),
+		readRuntimeLogs: tool({
+			description:
+				"Read current container runtime logs for an application, compose service, or database. This is different from build logs. For compose services with multiple containers, omit containerId once to discover the available container ids, then call again for the desired container.",
+			inputSchema: z.object({
+				serviceType: serviceTypeSchema,
+				serviceId: z.string(),
+				containerId: z.string().optional(),
+				tail: z.number().int().min(1).max(2000).default(100),
+				since: z
+					.string()
+					.regex(/^(all|\d+[smhd])$/)
+					.default("all"),
+				search: z
+					.string()
+					.regex(/^[a-zA-Z0-9 ._-]{0,500}$/)
+					.optional(),
+			}),
+			execute: async ({
+				serviceType,
+				serviceId,
+				containerId,
+				tail,
+				since,
+				search,
+			}) => {
+				try {
+					let logs: unknown;
+					switch (serviceType) {
+						case "application":
+							logs = await caller.application.readLogs({
+								applicationId: serviceId,
+								tail,
+								since,
+								search,
+							});
+							break;
+						case "compose": {
+							const compose = (await getService("compose", serviceId)) as any;
+							let selectedContainerId = containerId;
+							if (!selectedContainerId) {
+								const discovered =
+									await caller.docker.getContainersByAppNameMatch({
+										appName: compose.appName,
+										appType: compose.composeType,
+										serverId: compose.serverId || undefined,
+									});
+								const containers = Array.isArray(discovered) ? discovered : [];
+								if (containers.length !== 1) {
+									return toResult({
+										message:
+											containers.length === 0
+												? "No running compose containers were found."
+												: "Multiple compose containers were found. Call readRuntimeLogs again with one containerId.",
+										containers: containers.map((container) =>
+											pick(container, [
+												"containerId",
+												"name",
+												"image",
+												"state",
+												"status",
+											]),
+										),
+									});
+								}
+								selectedContainerId = containers[0]?.containerId;
+							}
+							logs = await caller.compose.readLogs({
+								composeId: serviceId,
+								containerId: selectedContainerId as string,
+								tail,
+								since,
+								search,
+							});
+							break;
+						}
+						case "postgres":
+							logs = await caller.postgres.readLogs({
+								postgresId: serviceId,
+								tail,
+								since,
+								search,
+							});
+							break;
+						case "mysql":
+							logs = await caller.mysql.readLogs({
+								mysqlId: serviceId,
+								tail,
+								since,
+								search,
+							});
+							break;
+						case "mariadb":
+							logs = await caller.mariadb.readLogs({
+								mariadbId: serviceId,
+								tail,
+								since,
+								search,
+							});
+							break;
+						case "mongo":
+							logs = await caller.mongo.readLogs({
+								mongoId: serviceId,
+								tail,
+								since,
+								search,
+							});
+							break;
+						case "redis":
+							logs = await caller.redis.readLogs({
+								redisId: serviceId,
+								tail,
+								since,
+								search,
+							});
+							break;
+						case "libsql":
+							logs = await caller.libsql.readLogs({
+								libsqlId: serviceId,
+								tail,
+								since,
+								search,
+							});
+							break;
+					}
+					return toResult(logs || "(runtime log is empty)");
 				} catch (error) {
 					return toErrorResult(error);
 				}

@@ -116,7 +116,9 @@ For the Dokploy server itself, enable metrics under **Settings → Server → Mo
 claude mcp add --transport http dokploy https://your-dokploy-domain/api/mcp --header "x-api-key: YOUR_API_KEY"
 ```
 
-The agent gets the same access as the API key's user and can manage projects, applications, databases, domains, env variables, deployments, and remote servers through the full Dokploy API.
+The agent gets the same access as the API key's user and can manage projects, applications, databases, domains, env variables, deployments, and remote servers through the full Dokploy API. The MCP handshake also explains the safe asynchronous deployment workflow: snapshot `deployment-latest`, push or queue the deployment, then use `deployment-followLatest` (or `deployment-follow` for a known id) until it returns `terminal: true`. These observation tools return normalized success/failure state and a build-log tail, while `deployment-readLogs` and the service `readLogs` tools provide deeper build and runtime diagnostics.
+
+Automatic push deployment requires the service's `autoDeploy` setting to be enabled, `triggerType` to be `push`, the pushed branch to match, and the git provider webhook to be connected. MCP clients can inspect or update those service settings and use `afterDeploymentId` with `deployment-followLatest` to prove that a particular push created a new build instead of confusing it with an older deployment.
 
 ### Using the terminal agent
 
@@ -126,7 +128,7 @@ After installing or updating Dokploy Pro, connect to the server over SSH and run
 dokploypro-harness
 ```
 
-The launcher opens an interactive terminal gateway inside the active Dokploy service. Configure and enable an AI provider and agent first under **Settings → AI Agent**. Terminal chats share the same persistent skills and memories as the web and messaging gateways, while keeping their own resumable session history.
+The launcher opens an interactive terminal gateway inside the active Dokploy service. Configure and enable an AI provider and agent first under **Settings → AI Agent**. Terminal chats share the same persistent skills and memories as the web and messaging gateways, while keeping their own resumable session history. Focused tools let the terminal agent configure auto-deploy, correlate and follow queued or push-triggered deployments, read build logs from the actual build server, and inspect current container runtime logs.
 
 Useful commands include `/new`, `/sessions`, `/resume`, `/status`, `/skills`, `/learn`, `/undo`, and `/retry`. Operations that require approval pause in the terminal and show an explicit `[y/N]` prompt before anything changes. Use `dokploypro-harness --help` for launcher options.
 

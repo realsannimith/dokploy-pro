@@ -30,9 +30,107 @@ import {
 	deployments,
 	server,
 } from "@/server/db/schema";
+import {
+	isDeploymentTerminal,
+	pollDeployment,
+	resolveDeploymentLogServerId,
+	summarizeDeploymentObservation,
+} from "@/server/deployment-observability";
 import { myQueue } from "@/server/queues/queueSetup";
 import { fetchDeployApiJobs, type QueueJobRow } from "@/server/utils/deploy";
 import { createTRPCRouter, protectedProcedure, withPermission } from "../trpc";
+
+type DeploymentDetails = Awaited<ReturnType<typeof findDeploymentById>>;
+type DeploymentContext = Parameters<typeof checkServicePermissionAndAccess>[0];
+
+const assertDeploymentReadAccess = async (
+	ctx: DeploymentContext,
+	deployment: DeploymentDetails,
+) => {
+	const serviceId =
+		deployment.applicationId ||
+		deployment.composeId ||
+		deployment.schedule?.applicationId ||
+		deployment.schedule?.composeId;
+	if (serviceId) {
+		await checkServicePermissionAndAccess(ctx, serviceId, {
+			deployment: ["read"],
+		});
+		return;
+	}
+
+	const serverId = deployment.schedule?.serverId || deployment.serverId;
+	if (serverId) {
+		const targetServer = await findServerById(serverId);
+		if (targetServer.organizationId !== ctx.session.activeOrganizationId) {
+			throw new TRPCError({
+				code: "UNAUTHORIZED",
+				message: "You don't have access to this deployment.",
+			});
+		}
+		return;
+	}
+
+	if (
+		deployment.schedule?.organizationId === ctx.session.activeOrganizationId
+	) {
+		return;
+	}
+
+	throw new TRPCError({
+		code: "UNAUTHORIZED",
+		message: "This deployment is not attached to an accessible service.",
+	});
+};
+
+const readDeploymentLogTail = async (
+	deployment: DeploymentDetails,
+	tail: number,
+) => {
+	if (tail === 0 || !deployment.logPath) return "";
+
+	const command = `tail -n ${tail} -- ${JSON.stringify(
+		deployment.logPath,
+	)} 2>/dev/null || true`;
+	const serverId = resolveDeploymentLogServerId(deployment);
+	if (serverId) {
+		const { stdout } = await execAsyncRemote(serverId, command);
+		return stdout;
+	}
+
+	if (IS_CLOUD) return "";
+	const { stdout } = await execAsync(command);
+	return stdout;
+};
+
+const findLatestDeployment = async (
+	type: "application" | "compose",
+	id: string,
+	afterDeploymentId?: string,
+): Promise<DeploymentDetails | null> => {
+	const rows =
+		type === "application"
+			? await findAllDeploymentsByApplicationId(id)
+			: await findAllDeploymentsByComposeId(id);
+	const latest = rows[0];
+	if (!latest || latest.deploymentId === afterDeploymentId) return null;
+	return await findDeploymentById(latest.deploymentId);
+};
+
+const observationOptionsSchema = {
+	tail: z.number().int().min(0).max(2000).default(100),
+	timeoutSeconds: z.number().int().min(0).max(25).default(20),
+	pollIntervalSeconds: z.number().int().min(1).max(5).default(2),
+};
+
+const missingDeploymentObservation = (message: string, timedOut: boolean) => ({
+	found: false as const,
+	terminal: false,
+	success: false,
+	timedOut,
+	message,
+	observedAt: new Date().toISOString(),
+});
 
 export const deploymentRouter = createTRPCRouter({
 	all: protectedProcedure
@@ -159,6 +257,102 @@ export const deploymentRouter = createTRPCRouter({
 			});
 			return deploymentsList;
 		}),
+
+	latest: protectedProcedure
+		.input(
+			z.object({
+				type: z.enum(["application", "compose"]),
+				id: z.string().min(1),
+				tail: observationOptionsSchema.tail,
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			await checkServicePermissionAndAccess(ctx, input.id, {
+				deployment: ["read"],
+			});
+			const deployment = await findLatestDeployment(input.type, input.id);
+			if (!deployment) {
+				return missingDeploymentObservation(
+					"No deployment has been created for this service yet.",
+					false,
+				);
+			}
+			const logs = await readDeploymentLogTail(deployment, input.tail);
+			return summarizeDeploymentObservation(deployment, { logs });
+		}),
+
+	inspect: protectedProcedure
+		.input(
+			z.object({
+				deploymentId: z.string().min(1),
+				tail: observationOptionsSchema.tail,
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			const deployment = await findDeploymentById(input.deploymentId);
+			await assertDeploymentReadAccess(ctx, deployment);
+			const logs = await readDeploymentLogTail(deployment, input.tail);
+			return summarizeDeploymentObservation(deployment, { logs });
+		}),
+
+	follow: protectedProcedure
+		.input(
+			z.object({
+				deploymentId: z.string().min(1),
+				...observationOptionsSchema,
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			const initial = await findDeploymentById(input.deploymentId);
+			await assertDeploymentReadAccess(ctx, initial);
+			const result = await pollDeployment({
+				load: () => findDeploymentById(input.deploymentId),
+				isComplete: (deployment) => isDeploymentTerminal(deployment.status),
+				timeoutMs: input.timeoutSeconds * 1000,
+				pollIntervalMs: input.pollIntervalSeconds * 1000,
+			});
+			const deployment = result.deployment ?? initial;
+			const logs = await readDeploymentLogTail(deployment, input.tail);
+			return summarizeDeploymentObservation(deployment, {
+				logs,
+				timedOut: result.timedOut,
+			});
+		}),
+
+	followLatest: protectedProcedure
+		.input(
+			z.object({
+				type: z.enum(["application", "compose"]),
+				id: z.string().min(1),
+				afterDeploymentId: z.string().min(1).optional(),
+				...observationOptionsSchema,
+			}),
+		)
+		.query(async ({ input, ctx }) => {
+			await checkServicePermissionAndAccess(ctx, input.id, {
+				deployment: ["read"],
+			});
+			const result = await pollDeployment({
+				load: () =>
+					findLatestDeployment(input.type, input.id, input.afterDeploymentId),
+				isComplete: (deployment) => isDeploymentTerminal(deployment.status),
+				timeoutMs: input.timeoutSeconds * 1000,
+				pollIntervalMs: input.pollIntervalSeconds * 1000,
+			});
+			if (!result.deployment) {
+				return missingDeploymentObservation(
+					input.afterDeploymentId
+						? "No newer deployment was created before the observation window ended. Check that auto-deploy is enabled, the trigger is push, the pushed branch matches, and the provider webhook is connected."
+						: "No deployment was created before the observation window ended.",
+					result.timedOut,
+				);
+			}
+			const logs = await readDeploymentLogTail(result.deployment, input.tail);
+			return summarizeDeploymentObservation(result.deployment, {
+				logs,
+				timedOut: result.timedOut,
+			});
+		}),
 	killProcess: protectedProcedure
 		.input(
 			z.object({
@@ -244,41 +438,7 @@ export const deploymentRouter = createTRPCRouter({
 		)
 		.query(async ({ input, ctx }) => {
 			const deployment = await findDeploymentById(input.deploymentId);
-			const serviceId = deployment.applicationId || deployment.composeId;
-			if (serviceId) {
-				await checkServicePermissionAndAccess(ctx, serviceId, {
-					deployment: ["read"],
-				});
-			} else if (deployment.schedule?.serverId) {
-				const targetServer = await findServerById(deployment.schedule.serverId);
-				if (targetServer.organizationId !== ctx.session.activeOrganizationId) {
-					throw new TRPCError({
-						code: "UNAUTHORIZED",
-						message: "You don't have access to this deployment.",
-					});
-				}
-			}
-
-			if (!deployment.logPath) {
-				return "";
-			}
-
-			const command = `tail -n ${input.tail} "${deployment.logPath}" 2>/dev/null || echo ""`;
-			const serverId =
-				deployment.serverId ||
-				deployment.schedule?.serverId ||
-				deployment.application?.serverId ||
-				deployment.compose?.serverId;
-			if (serverId) {
-				const { stdout } = await execAsyncRemote(serverId, command);
-				return stdout;
-			}
-
-			if (IS_CLOUD) {
-				return "";
-			}
-
-			const { stdout } = await execAsync(command);
-			return stdout;
+			await assertDeploymentReadAccess(ctx, deployment);
+			return await readDeploymentLogTail(deployment, input.tail);
 		}),
 });
