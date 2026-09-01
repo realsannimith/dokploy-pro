@@ -1,0 +1,17 @@
+export const developerRolePermissions = {
+	project: ["create"],
+	service: ["create", "read"],
+	environment: ["create", "read"],
+	docker: ["read"],
+	gitProviders: ["read", "create", "delete"],
+	api: ["read"],
+	volume: ["read", "create", "delete"],
+	deployment: ["read", "create", "cancel"],
+	envVars: ["read", "write"],
+	projectEnvVars: ["read"],
+	environmentEnvVars: ["read"],
+	domain: ["read", "create", "delete"],
+	schedule: ["read", "create", "update", "delete"],
+	logs: ["read"],
+	monitoring: ["read"],
+} satisfies Record<string, string[]>;

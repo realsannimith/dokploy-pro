@@ -1,6 +1,12 @@
 import copy from "copy-to-clipboard";
-import { BotIcon, CheckIcon, CopyIcon, KeyIcon } from "lucide-react";
-import { useState } from "react";
+import {
+	BotIcon,
+	CheckIcon,
+	CopyIcon,
+	KeyIcon,
+	Trash2Icon,
+} from "lucide-react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +18,12 @@ import {
 	CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+	buildMcpApiKeyInput,
+	forgetMcpApiKey,
+	loadMcpApiKey,
+	rememberMcpApiKey,
+} from "@/lib/mcp-api-key";
 import { api } from "@/utils/api";
 import { useUrl } from "@/utils/hooks/use-url";
 
@@ -321,15 +333,27 @@ export const McpConnection = () => {
 		onSuccess: (data) => {
 			if (!data) return;
 			setApiKey(data.key);
+			if (activeOrganization?.id) {
+				rememberMcpApiKey(
+					window.sessionStorage,
+					activeOrganization.id,
+					data.key,
+				);
+			}
 			void refetchUser();
 			toast.success(
-				"API key generated and filled in below. It won't be shown again, so copy your agent config now.",
+				"API key generated and retained for this browser tab. Copy your agent config before you forget the key or close the browser session.",
 			);
 		},
 		onError: () => {
 			toast.error("Failed to generate API key");
 		},
 	});
+
+	useEffect(() => {
+		if (!activeOrganization?.id) return;
+		setApiKey(loadMcpApiKey(window.sessionStorage, activeOrganization.id));
+	}, [activeOrganization?.id]);
 
 	const provider =
 		PROVIDERS.find((p) => p.id === selectedProvider) ?? PROVIDERS[0];
@@ -342,13 +366,22 @@ export const McpConnection = () => {
 			toast.error("No active organization found");
 			return;
 		}
-		const timestamp = new Date().toISOString().slice(0, 10);
-		createApiKey.mutate({
-			name: `mcp-agent-${timestamp}`,
-			metadata: {
-				organizationId: activeOrganization.id,
-			},
-		});
+		createApiKey.mutate(buildMcpApiKeyInput(activeOrganization.id));
+	};
+
+	const updateApiKey = (value: string) => {
+		setApiKey(value);
+		if (activeOrganization?.id) {
+			rememberMcpApiKey(window.sessionStorage, activeOrganization.id, value);
+		}
+	};
+
+	const forgetKey = () => {
+		setApiKey("");
+		if (activeOrganization?.id) {
+			forgetMcpApiKey(window.sessionStorage, activeOrganization.id);
+		}
+		toast.success("API key forgotten from this browser tab");
 	};
 
 	return (
@@ -376,10 +409,14 @@ export const McpConnection = () => {
 							</span>
 							<div className="flex flex-col sm:flex-row gap-2">
 								<Input
+									type="password"
 									placeholder="Paste an existing API key, or generate one"
 									value={apiKey}
-									onChange={(e) => setApiKey(e.target.value)}
+									onChange={(e) => updateApiKey(e.target.value)}
 									className="font-mono text-xs"
+									autoComplete="off"
+									enablePasswordGenerator={false}
+									enableCopyButton={!!apiKey}
 								/>
 								<Button
 									type="button"
@@ -393,6 +430,17 @@ export const McpConnection = () => {
 									)}
 									Generate Key
 								</Button>
+								{apiKey && (
+									<Button
+										type="button"
+										variant="outline"
+										className="shrink-0"
+										onClick={forgetKey}
+									>
+										<Trash2Icon className="size-4 mr-1" />
+										Forget
+									</Button>
+								)}
 							</div>
 							<span className="text-xs text-muted-foreground">
 								{isPlaceholder ? (
@@ -408,7 +456,7 @@ export const McpConnection = () => {
 										in the API/CLI Keys section above.
 									</>
 								) : (
-									"Your key is filled into every config below — copy and paste straight into your agent. The key is only visible here until you leave this page."
+									"Your key is filled into every config below and retained only in this browser tab's session, so it survives a refresh. Dokploy stores only its verification hash; use Forget or close the browser session to remove this temporary browser copy."
 								)}
 							</span>
 						</div>

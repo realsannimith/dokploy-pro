@@ -52,6 +52,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { developerRolePermissions } from "@/lib/custom-role-presets";
 import { api } from "@/utils/api";
 
 /** Labels and descriptions for each resource */
@@ -518,24 +519,9 @@ const ROLE_PRESETS: {
 	{
 		name: "developer",
 		label: "Developer",
-		description: "Deploy services, manage env vars, domains, and view logs",
-		permissions: {
-			project: ["create"],
-			service: ["create", "read"],
-			environment: ["create", "read"],
-			docker: ["read"],
-			gitProviders: ["read"],
-			api: ["read"],
-			volume: ["read", "create", "delete"],
-			deployment: ["read", "create", "cancel"],
-			envVars: ["read", "write"],
-			projectEnvVars: ["read"],
-			environmentEnvVars: ["read"],
-			domain: ["read", "create", "delete"],
-			schedule: ["read", "create", "update", "delete"],
-			logs: ["read"],
-			monitoring: ["read"],
-		},
+		description:
+			"Deploy services, connect Git providers, manage env vars and domains, and view logs",
+		permissions: developerRolePermissions,
 	},
 	{
 		name: "deployer",
